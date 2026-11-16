@@ -1,9 +1,9 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <style name="Theme.Amedis" parent="android:Theme.Material.Light.DarkActionBar">
+    <style name="Theme.Amedis" parent="android:Theme.Material.Light.NoActionBar">
         <item name="android:colorPrimary">#0F6B45</item>
         <item name="android:colorPrimaryDark">#0C4B32</item>
-        <item name="android:colorAccent">#D4A017</item>
-        <item name="android:windowBackground">@android:color/white</item>
+        <item name="android:colorAccent">#0F6B45</item>
+        <item name="android:windowBackground">@color/fond</item>
     </style>
 </resources>

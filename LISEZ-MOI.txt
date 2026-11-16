@@ -1,12 +1,14 @@
-AMEDIS pro Asso - Appli Android des membres (hors Play Store)
-=============================================================
-Projet Android de l'appli "AMEDIS Asso". L'APK est fabrique automatiquement par GitHub
-(onglet Actions > "Fabriquer l'APK" > Run workflow) et publie dans "Releases".
-Suivez le guide "Guide_Appli_Android_AMEDIS_Asso.pdf".
+AMEDIS Asso - Appli Android des membres, version 2.0.0 (hors Play Store)
+========================================================================
+L'APK est fabrique automatiquement par GitHub (onglet Actions > "Fabriquer l'APK" > Run workflow)
+et publie dans "Releases". La cle de signature N'EST PAS dans ce projet : elle se place dans les Secrets GitHub.
 
-Contenu :
+Fichiers :
 - .github/workflows/fabriquer-apk.yml : recette de fabrication et de publication
-- app/ : code de l'appli (MainActivity.java), icones, reglages
-La cle de signature N'EST PAS dans ce projet : elle se place dans les Secrets GitHub.
+- app/src/main/java/ci/amedis/asso/membres/ : MainActivity (ecrans), Donnees (site et memoire hors connexion),
+  Ui (couleurs clair/sombre), Icone (icones dessinees), Anneau (jauge animee)
+
+Le site de l'association doit etre en version 1.7.0 (ou plus) pour les ecrans natifs ;
+avec un site 1.6.x, l'appli ouvre l'espace en "mode site".
 
 Conception : M. KAMAGATE, Inspecteur d'Orientation, CIO Bouake 2.

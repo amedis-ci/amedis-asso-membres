@@ -6,29 +6,28 @@ import android.content.ClipData;
 import android.content.ClipboardManager;
 import android.content.Context;
 import android.content.Intent;
-import android.content.SharedPreferences;
+import android.graphics.Bitmap;
 import android.graphics.Color;
-import android.graphics.Typeface;
+import android.graphics.Paint;
 import android.graphics.drawable.GradientDrawable;
-import android.net.ConnectivityManager;
-import android.net.NetworkInfo;
 import android.net.Uri;
 import android.os.Bundle;
+import android.os.Handler;
+import android.os.Looper;
 import android.text.InputType;
-import android.util.TypedValue;
 import android.view.Gravity;
-import android.view.Menu;
-import android.view.MenuItem;
 import android.view.View;
 import android.view.ViewGroup;
+import android.view.WindowManager;
+import android.view.animation.AlphaAnimation;
+import android.view.animation.TranslateAnimation;
+import android.view.animation.AnimationSet;
 import android.webkit.CookieManager;
 import android.webkit.WebChromeClient;
-import android.webkit.WebResourceError;
 import android.webkit.WebResourceRequest;
 import android.webkit.WebSettings;
 import android.webkit.WebView;
 import android.webkit.WebViewClient;
-import android.widget.Button;
 import android.widget.EditText;
 import android.widget.FrameLayout;
 import android.widget.ImageView;
@@ -38,10 +37,16 @@ import android.widget.ScrollView;
 import android.widget.TextView;
 import android.widget.Toast;
 
+import androidx.swiperefreshlayout.widget.SwipeRefreshLayout;
+
 import com.google.mlkit.vision.barcode.common.Barcode;
 import com.google.mlkit.vision.codescanner.GmsBarcodeScanner;
 import com.google.mlkit.vision.codescanner.GmsBarcodeScannerOptions;
 import com.google.mlkit.vision.codescanner.GmsBarcodeScanning;
+import com.google.zxing.BarcodeFormat;
+import com.google.zxing.EncodeHintType;
+import com.google.zxing.common.BitMatrix;
+import com.google.zxing.qrcode.QRCodeWriter;
 
 import org.json.JSONArray;
 import org.json.JSONObject;
@@ -50,46 +55,69 @@ import java.io.BufferedReader;
 import java.io.InputStreamReader;
 import java.net.HttpURLConnection;
 import java.net.URL;
-import java.util.regex.Matcher;
-import java.util.regex.Pattern;
+import java.util.EnumMap;
+import java.util.Locale;
+import java.util.Map;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 
 /**
- * AMEDIS pro Asso – Espace des membres (application Android).
- * Affiche le site de consultation de l'association (Google Apps Script),
- * alimenté par le logiciel AMEDIS pro Asso du trésorier. Consultation seulement.
+ * AMEDIS Asso – appli des membres. Écrans natifs alimentés par le site de l'association (lecture seule),
+ * avec copie hors connexion, carte de membre numérique, numéros d'urgence et verrouillage par code.
  * Conception : M. KAMAGATE, Inspecteur d'Orientation, CIO Bouaké 2.
  */
 public class MainActivity extends Activity {
 
-    private static final Pattern LIEN = Pattern.compile(
-            "https://script\\.google\\.com/macros/s/[A-Za-z0-9_-]+/exec[^\\s\"'<>]*");
-    private static final int VERT = 0xFF0F6B45, VERT_FONCE = 0xFF0C4B32, OR = 0xFFD4A017;
-    private static final long UN_JOUR = 24L * 3600 * 1000;
+    private static final int T_ACCUEIL = 0, T_RECUS = 1, T_CARTE = 2, T_ASSO = 3;
+    private static final String[] NOMS_ONGLETS = {"Accueil", "Reçus", "Ma carte", "Association"};
+    private static final int[] ICONES_ONGLETS = {Icone.MAISON, Icone.RECU, Icone.CARTE, Icone.GROUPE};
+    private static final long UN_JOUR = 24L * 3600 * 1000, VERROU_APRES = 60 * 1000;
 
-    private static final int M_ACTUALISER = 1, M_DOSSIER = 2, M_CARTE = 3, M_ESPACE = 4,
-            M_SCANNER = 5, M_MAJ = 6, M_APROPOS = 7, M_OUBLIER = 8;
+    private Donnees donnees;
+    private final ExecutorService fond = Executors.newSingleThreadExecutor();
+    private final Handler ui = new Handler(Looper.getMainLooper());
 
-    private SharedPreferences prefs;
-    private FrameLayout racine;
+    private FrameLayout racine, contenu;
+    private ProgressBar chargementVue;
+    private final Icone[] icones = new Icone[4];
+    private final TextView[] libelles = new TextView[4];
+    private View pastilleRecus, bienvenue, verrou, site;
     private WebView web;
-    private ProgressBar chargement;
-    private View accueil, horsLigne;
+    private SwipeRefreshLayout tirer;
 
-    // ------------------------------------------------------------------ cycle de vie
+    private int onglet = T_ACCUEIL;
+    private JSONObject M, AS;          // données du membre, données de l'association
+    private boolean horsLigne, chargement, verrouille;
+    private String erreur;
+    private long sortieLe;
+
+    // ================================================================== cycle de vie
     @Override
     protected void onCreate(Bundle etat) {
         super.onCreate(etat);
-        prefs = getSharedPreferences("amedis", MODE_PRIVATE);
+        Ui.init(this);
+        getWindow().setStatusBarColor(Ui.VERT_FONCE);
+        getWindow().setNavigationBarColor(Ui.CARTE);
+        donnees = new Donnees(getSharedPreferences("amedis", MODE_PRIVATE));
+
         racine = new FrameLayout(this);
+        racine.setBackgroundColor(Ui.FOND);
         setContentView(racine);
-        construireWeb();
+        construireAppli();
 
         if (!traiterIntent(getIntent())) {
-            String depart = pageDeDepart();
-            if (depart == null) montrerAccueil();
-            else ouvrir(depart);
+            if (donnees.connu()) {
+                M = donnees.membreMemorise();
+                AS = donnees.assoMemorisee();
+                afficher();
+                rafraichir(false);
+            } else {
+                montrerBienvenue();
+            }
         }
-        if (System.currentTimeMillis() - prefs.getLong("majLe", 0) > UN_JOUR) verifierMaj(false);
+        if (donnees.aUnCode() && donnees.connu()) verrouiller();
+        long derniere = getSharedPreferences("amedis", MODE_PRIVATE).getLong("majLe", 0);
+        if (System.currentTimeMillis() - derniere > UN_JOUR) verifierMaj(false);
     }
 
     @Override
@@ -98,148 +126,803 @@ public class MainActivity extends Activity {
         traiterIntent(intent);
     }
 
-    /** Lien partagé depuis WhatsApp (Partager > AMEDIS Asso). */
-    private boolean traiterIntent(Intent intent) {
-        if (intent != null && Intent.ACTION_SEND.equals(intent.getAction())) {
-            String texte = intent.getStringExtra(Intent.EXTRA_TEXT);
-            if (texte != null) return recevoirLien(texte);
-        }
-        return false;
+    @Override
+    protected void onPause() {
+        super.onPause();
+        sortieLe = System.currentTimeMillis();
+    }
+
+    @Override
+    protected void onResume() {
+        super.onResume();
+        if (sortieLe > 0 && !verrouille && donnees.aUnCode() && donnees.connu()
+                && System.currentTimeMillis() - sortieLe > VERROU_APRES) verrouiller();
+        luminosite();
     }
 
     @Override
     public void onBackPressed() {
-        if (web.getVisibility() == View.VISIBLE && web.canGoBack()) web.goBack();
-        else super.onBackPressed();
+        if (site != null) {
+            if (web != null && web.canGoBack()) web.goBack();
+            else fermerSite();
+        } else if (verrouille) {
+            moveTaskToBack(true);
+        } else if (bienvenue == null && onglet != T_ACCUEIL) {
+            choisir(T_ACCUEIL);
+        } else {
+            super.onBackPressed();
+        }
     }
 
-    // ------------------------------------------------------------------ navigateur intégré
-    private void construireWeb() {
-        web = new WebView(this);
-        WebSettings s = web.getSettings();
-        s.setJavaScriptEnabled(true);
-        s.setDomStorageEnabled(true);
-        s.setLoadWithOverviewMode(true);
-        s.setUseWideViewPort(true);
-        s.setJavaScriptCanOpenWindowsAutomatically(true);
-        CookieManager.getInstance().setAcceptCookie(true);
-        CookieManager.getInstance().setAcceptThirdPartyCookies(web, true);
+    /** Lien partagé depuis WhatsApp (Partager > AMEDIS Asso). */
+    private boolean traiterIntent(Intent intent) {
+        if (intent != null && Intent.ACTION_SEND.equals(intent.getAction())) {
+            String t = intent.getStringExtra(Intent.EXTRA_TEXT);
+            if (t != null) return recevoirLien(t);
+        }
+        return false;
+    }
 
-        web.setWebViewClient(new WebViewClient() {
-            @Override
-            public boolean shouldOverrideUrlLoading(WebView v, WebResourceRequest r) {
-                return externe(r.getUrl());
-            }
+    // ================================================================== structure : contenu + barre d'onglets
+    private void construireAppli() {
+        LinearLayout col = Ui.colonne(this);
+        contenu = new FrameLayout(this);
+        col.addView(contenu, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f));
 
-            @SuppressWarnings("deprecation")
-            @Override
-            public boolean shouldOverrideUrlLoading(WebView v, String url) {
-                return externe(Uri.parse(url));
-            }
+        View trait = new View(this);
+        trait.setBackgroundColor(Ui.LIGNE);
+        col.addView(trait, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 1));
 
-            @Override
-            public void onPageStarted(WebView v, String url, android.graphics.Bitmap icone) {
-                chargement.setVisibility(View.VISIBLE);
+        LinearLayout barre = Ui.ligne(this);
+        barre.setBackgroundColor(Ui.CARTE);
+        barre.setPadding(0, Ui.dp(6), 0, Ui.dp(8));
+        for (int i = 0; i < 4; i++) {
+            final int n = i;
+            LinearLayout b = Ui.colonne(this);
+            b.setGravity(Gravity.CENTER_HORIZONTAL);
+            FrameLayout cadre = new FrameLayout(this);
+            icones[i] = new Icone(this, ICONES_ONGLETS[i], Ui.DOUX);
+            cadre.addView(icones[i], new FrameLayout.LayoutParams(Ui.dp(26), Ui.dp(26)));
+            if (i == T_RECUS) {
+                pastilleRecus = new View(this);
+                pastilleRecus.setBackground(Ui.arrondi(Ui.ROUGE, Ui.dp(5)));
+                pastilleRecus.setVisibility(View.GONE);
+                cadre.addView(pastilleRecus, new FrameLayout.LayoutParams(Ui.dp(10), Ui.dp(10), Gravity.END | Gravity.TOP));
             }
+            b.addView(cadre);
+            libelles[i] = Ui.texte(this, NOMS_ONGLETS[i], 11.5f, Ui.DOUX, true);
+            b.addView(libelles[i]);
+            b.setOnClickListener(v -> choisir(n));
+            barre.addView(b, Ui.poids(1));
+        }
+        col.addView(barre);
+        racine.addView(col, plein());
 
-            @Override
-            public void onPageFinished(WebView v, String url) {
-                chargement.setVisibility(View.GONE);
-            }
+        chargementVue = new ProgressBar(this, null, android.R.attr.progressBarStyleHorizontal);
+        chargementVue.setIndeterminate(true);
+        chargementVue.setVisibility(View.GONE);
+        racine.addView(chargementVue, new FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, Ui.dp(4), Gravity.TOP));
+        majBarre();
+    }
 
-            @Override
-            public void onReceivedError(WebView v, WebResourceRequest r, WebResourceError e) {
-                if (r.isForMainFrame()) montrerHorsLigne();
-            }
+    private void choisir(int n) {
+        onglet = n;
+        if (n == T_RECUS) marquerRecusVus();
+        majBarre();
+        afficher();
+        luminosite();
+    }
 
-            @SuppressWarnings("deprecation")
-            @Override
-            public void onReceivedError(WebView v, int code, String description, String url) {
-                montrerHorsLigne();
+    private void majBarre() {
+        for (int i = 0; i < 4; i++) {
+            int c = i == onglet ? Ui.VERT_TEXTE : Ui.DOUX;
+            icones[i].couleur(c);
+            libelles[i].setTextColor(c);
+        }
+    }
+
+    /** La carte de membre s'affiche à pleine luminosité, pour que son code QR se lise bien. */
+    private void luminosite() {
+        WindowManager.LayoutParams lp = getWindow().getAttributes();
+        lp.screenBrightness = onglet == T_CARTE && bienvenue == null && site == null ? 1f : -1f;
+        getWindow().setAttributes(lp);
+    }
+
+    private void afficher() {
+        contenu.removeAllViews();
+        LinearLayout page = Ui.colonne(this);
+        page.setPadding(0, 0, 0, Ui.dp(24));
+        switch (onglet) {
+            case T_RECUS: pageRecus(page); break;
+            case T_CARTE: pageCarte(page); break;
+            case T_ASSO: pageAsso(page); break;
+            default: pageAccueil(page); break;
+        }
+        ScrollView defil = new ScrollView(this);
+        defil.setFillViewport(true);
+        defil.addView(page);
+        tirer = new SwipeRefreshLayout(this);
+        tirer.setColorSchemeColors(Ui.VERT, Ui.OR);
+        tirer.setProgressBackgroundColorSchemeColor(Ui.CARTE);
+        tirer.setOnRefreshListener(() -> rafraichir(true));
+        tirer.addView(defil);
+        contenu.addView(tirer, plein());
+        apparition(page);
+    }
+
+    private void apparition(View v) {
+        AnimationSet a = new AnimationSet(true);
+        a.addAnimation(new AlphaAnimation(0f, 1f));
+        a.addAnimation(new TranslateAnimation(0, 0, Ui.dp(14), 0));
+        a.setDuration(260);
+        v.startAnimation(a);
+    }
+
+    // ================================================================== briques de page
+    private LinearLayout marge(LinearLayout page) {
+        LinearLayout l = Ui.colonne(this);
+        l.setPadding(Ui.dp(16), 0, Ui.dp(16), 0);
+        page.addView(l, Ui.large(0));
+        return l;
+    }
+
+    private void titre(LinearLayout page, String titre, String sous) {
+        LinearLayout l = Ui.colonne(this);
+        l.setPadding(Ui.dp(20), Ui.dp(22), Ui.dp(20), Ui.dp(6));
+        l.addView(Ui.texte(this, titre, 24, Ui.TEXTE, true));
+        if (sous != null && !sous.isEmpty()) {
+            TextView s = Ui.texte(this, sous, 13.5f, Ui.DOUX, false);
+            s.setPadding(0, Ui.dp(2), 0, 0);
+            l.addView(s);
+        }
+        page.addView(l);
+    }
+
+    private TextView section(LinearLayout parent, String t) {
+        TextView v = Ui.etiquette(this, t);
+        v.setPadding(Ui.dp(4), Ui.dp(22), 0, Ui.dp(8));
+        parent.addView(v);
+        return v;
+    }
+
+    /** Bandeau « hors connexion » ou message d'erreur du site. */
+    private void bandeauEtat(LinearLayout parent) {
+        if (!horsLigne && (erreur == null || erreur.isEmpty())) return;
+        LinearLayout b = Ui.ligne(this);
+        b.setPadding(Ui.dp(14), Ui.dp(12), Ui.dp(14), Ui.dp(12));
+        b.setBackground(Ui.arrondi(horsLigne ? Ui.OR_PALE : Ui.ROUGE_PALE, Ui.dp(12)));
+        b.addView(new Icone(this, horsLigne ? Icone.NUAGE : Icone.ALERTE, horsLigne ? Ui.ORANGE : Ui.ROUGE),
+                new LinearLayout.LayoutParams(Ui.dp(22), Ui.dp(22)));
+        b.addView(Ui.espace(this, Ui.dp(10)));
+        long le = donnees.memoriseLe();
+        String t = horsLigne
+                ? "Hors connexion" + (le > 0 ? " : informations du " + Ui.moment(le) + "." : ".") + " Tirez vers le bas pour réessayer."
+                : erreur;
+        b.addView(Ui.texte(this, t, 13.5f, Ui.TEXTE, false), Ui.poids(1));
+        LinearLayout.LayoutParams lp = Ui.large(Ui.dp(14));
+        parent.addView(b, lp);
+    }
+
+    private View bouton(String t, boolean principal, View.OnClickListener action) {
+        TextView b = Ui.texte(this, t, 15, principal ? Ui.VERT_FONCE : Ui.VERT_TEXTE, true);
+        b.setGravity(Gravity.CENTER);
+        b.setPadding(Ui.dp(16), Ui.dp(13), Ui.dp(16), Ui.dp(13));
+        b.setBackground(principal ? Ui.arrondi(Ui.OR, Ui.dp(12)) : Ui.bordure(Color.TRANSPARENT, Ui.VERT_TEXTE, Ui.dp(12)));
+        b.setOnClickListener(action);
+        b.setClickable(true);
+        return b;
+    }
+
+    private View rondIcone(int type, int fond, int trait, int taille) {
+        FrameLayout f = new FrameLayout(this);
+        f.setBackground(Ui.arrondi(fond, taille / 2));
+        Icone i = new Icone(this, type, trait);
+        int m = taille / 4;
+        FrameLayout.LayoutParams lp = new FrameLayout.LayoutParams(taille - 2 * m, taille - 2 * m, Gravity.CENTER);
+        f.addView(i, lp);
+        f.setLayoutParams(new LinearLayout.LayoutParams(taille, taille));
+        return f;
+    }
+
+    private boolean aFinances() {
+        return M != null && M.optJSONObject("moi") != null && M.optJSONObject("moi").optJSONArray("c") != null;
+    }
+
+    private String monnaie() {
+        JSONObject a = M == null ? null : M.optJSONObject("asso");
+        return a == null ? "F CFA" : a.optString("monnaie", "F CFA");
+    }
+
+    /** Invitation à ouvrir le lien personnel ou à se connecter, quand seule la carte est connue. */
+    private void inviterAccesComplet(LinearLayout parent, String pourquoi) {
+        LinearLayout c = Ui.carte(this);
+        LinearLayout l = Ui.ligne(this);
+        l.addView(rondIcone(Icone.CADENAS, Ui.VERT_PALE, Ui.VERT_TEXTE, Ui.dp(44)));
+        l.addView(Ui.espace(this, Ui.dp(12)));
+        LinearLayout t = Ui.colonne(this);
+        t.addView(Ui.texte(this, "Accès à vos informations", 16, Ui.TEXTE, true));
+        t.addView(Ui.texte(this, pourquoi, 13.5f, Ui.DOUX, false));
+        l.addView(t, Ui.poids(1));
+        c.addView(l);
+        c.addView(bouton("Scanner le code QR de mon dossier", true, v -> scanner()), Ui.large(Ui.dp(14)));
+        if (donnees.base() != null) c.addView(bouton("Me connecter avec mon identifiant", false, v -> connexion()), Ui.large(Ui.dp(10)));
+        parent.addView(c, Ui.large(Ui.dp(14)));
+    }
+
+    // ================================================================== ACCUEIL
+    private void pageAccueil(LinearLayout page) {
+        JSONObject asso = M == null ? new JSONObject() : M.optJSONObject("asso");
+        if (asso == null) asso = new JSONObject();
+        JSONObject moi = M == null ? new JSONObject() : M.optJSONObject("moi");
+        if (moi == null) moi = new JSONObject();
+
+        // en-tête vert
+        LinearLayout tete = Ui.colonne(this);
+        GradientDrawable g = new GradientDrawable(GradientDrawable.Orientation.TL_BR, new int[]{Ui.VERT, Ui.VERT_FONCE});
+        g.setCornerRadii(new float[]{0, 0, 0, 0, Ui.dp(28), Ui.dp(28), Ui.dp(28), Ui.dp(28)});
+        tete.setBackground(g);
+        tete.setPadding(Ui.dp(20), Ui.dp(20), Ui.dp(20), Ui.dp(64));
+        LinearLayout haut = Ui.ligne(this);
+        ImageView logo = new ImageView(this);
+        Bitmap bl = Ui.image(asso.optString("logo", ""));
+        logo.setImageBitmap(bl != null ? Ui.rond(bl, Ui.dp(44)) : Ui.initiales("A", Ui.dp(44)));
+        haut.addView(logo, new LinearLayout.LayoutParams(Ui.dp(44), Ui.dp(44)));
+        haut.addView(Ui.espace(this, Ui.dp(12)));
+        LinearLayout nomAsso = Ui.colonne(this);
+        nomAsso.addView(Ui.texte(this, asso.optString("nom", "Mon association"), 15, Color.WHITE, true));
+        String ex = asso.has("exercice") ? "Exercice " + asso.optString("exercice") : "";
+        String siege = asso.optString("siege", "");
+        nomAsso.addView(Ui.texte(this, ex + (siege.isEmpty() ? "" : (ex.isEmpty() ? "" : " · ") + siege), 12.5f, 0xFFCFE7DA, false));
+        haut.addView(nomAsso, Ui.poids(1));
+        tete.addView(haut);
+        String prenom = moi.optString("prenoms", "").trim().split("\\s+")[0];
+        tete.addView(Ui.texte(this, salutation() + (prenom.isEmpty() ? "" : ", " + capitaliser(prenom)), 25, Color.WHITE, true), Ui.large(Ui.dp(22)));
+        String detail = (moi.optString("i", "").isEmpty() ? "" : "Membre n° " + moi.optString("i"))
+                + (moi.optString("fonction", "").isEmpty() ? "" : " · " + moi.optString("fonction"));
+        if (!detail.isEmpty()) tete.addView(Ui.texte(this, detail, 13.5f, 0xFFCFE7DA, false), Ui.large(Ui.dp(2)));
+        page.addView(tete);
+
+        LinearLayout corps = marge(page);
+        if (!aFinances()) {
+            LinearLayout.LayoutParams lp = Ui.large(-Ui.dp(44));
+            LinearLayout vide = Ui.colonne(this);
+            corps.addView(vide, lp);
+            bandeauEtat(corps);
+            inviterAccesComplet(corps, "Votre carte de membre est enregistrée. Pour voir vos cotisations et vos reçus, "
+                    + "scannez le code QR personnel de votre dossier (envoyé par le bureau) ou connectez-vous.");
+            return;
+        }
+
+        // carte « ma situation »
+        JSONArray cots = M.optJSONArray("cotisations");
+        JSONArray c = moi.optJSONArray("c");
+        double attendu = 0, reste = 0, paye = 0;
+        boolean toutOk = true;
+        int concernees = 0;
+        for (int i = 0; c != null && i < c.length(); i++) {
+            JSONObject x = c.optJSONObject(i);
+            if (x == null || x.optBoolean("nc")) continue;
+            concernees++;
+            attendu += x.optDouble("a", 0);
+            reste += x.optDouble("r", 0);
+            paye += x.optDouble("t", 0);
+            if (!x.optBoolean("ok")) toutOk = false;
+        }
+        double part = attendu > 0 ? (attendu - reste) / attendu : (toutOk ? 1 : 0);
+
+        LinearLayout sit = Ui.carte(this);
+        sit.setElevation(Ui.dp(4));
+        LinearLayout l = Ui.ligne(this);
+        Anneau an = new Anneau(this, Ui.PISTE, toutOk ? Ui.VERT_TEXTE : Ui.OR, Ui.TEXTE);
+        l.addView(an, new LinearLayout.LayoutParams(Ui.dp(104), Ui.dp(104)));
+        an.valeur(part, "payé");
+        l.addView(Ui.espace(this, Ui.dp(16)));
+        LinearLayout t = Ui.colonne(this);
+        t.addView(Ui.etiquette(this, "Ma situation"));
+        if (toutOk) {
+            LinearLayout ok = Ui.ligne(this);
+            ok.addView(new Icone(this, Icone.OK, Ui.VERT_TEXTE), new LinearLayout.LayoutParams(Ui.dp(24), Ui.dp(24)));
+            ok.addView(Ui.espace(this, Ui.dp(6)));
+            ok.addView(Ui.texte(this, "À jour", 24, Ui.VERT_TEXTE, true));
+            t.addView(ok, Ui.large(Ui.dp(4)));
+            t.addView(Ui.texte(this, "Merci pour votre engagement !", 13.5f, Ui.DOUX, false));
+        } else {
+            t.addView(Ui.texte(this, "Reste à payer", 14, Ui.DOUX, false), Ui.large(Ui.dp(4)));
+            t.addView(Ui.texte(this, Ui.argent(reste, monnaie()), 23, Ui.ROUGE, true));
+        }
+        t.addView(Ui.texte(this, "Versé : " + Ui.argent(paye, monnaie()), 12.5f, Ui.DOUX, false), Ui.large(Ui.dp(6)));
+        l.addView(t, Ui.poids(1));
+        sit.addView(l);
+        corps.addView(sit, Ui.large(-Ui.dp(44)));
+
+        bandeauEtat(corps);
+
+        // cotisations
+        section(corps, "Mes cotisations (" + concernees + ")");
+        for (int i = 0; cots != null && c != null && i < cots.length() && i < c.length(); i++) {
+            JSONObject k = cots.optJSONObject(i), x = c.optJSONObject(i);
+            if (k == null || x == null || x.optBoolean("nc")) continue;
+            corps.addView(carteCotisation(k, x), Ui.large(Ui.dp(10)));
+        }
+
+        // derniers reçus
+        JSONArray rc = moi.optJSONArray("rc");
+        if (rc != null && rc.length() > 0) {
+            section(corps, "Dernier reçu");
+            corps.addView(carteRecu(rc.optJSONObject(rc.length() - 1)), Ui.large(0));
+            TextView tous = Ui.texte(this, "Voir tous mes reçus (" + rc.length() + ")  →", 14, Ui.VERT_TEXTE, true);
+            tous.setPadding(Ui.dp(4), Ui.dp(12), 0, 0);
+            tous.setOnClickListener(v -> choisir(T_RECUS));
+            corps.addView(tous);
+        }
+
+        TextView pied = Ui.texte(this, "Informations publiées par le trésorier le " + Ui.moment(M.optString("publieLe", ""))
+                + ". Consultation seulement.", 12, Ui.DOUX, false);
+        pied.setGravity(Gravity.CENTER);
+        pied.setPadding(Ui.dp(8), Ui.dp(24), Ui.dp(8), 0);
+        corps.addView(pied);
+    }
+
+    private View carteCotisation(JSONObject k, JSONObject x) {
+        int teinte = Ui.couleur(k.optString("couleur", ""), Ui.VERT);
+        LinearLayout c = Ui.carte(this);
+        LinearLayout l = Ui.ligne(this);
+        View point = new View(this);
+        point.setBackground(Ui.arrondi(teinte, Ui.dp(5)));
+        l.addView(point, new LinearLayout.LayoutParams(Ui.dp(10), Ui.dp(10)));
+        l.addView(Ui.espace(this, Ui.dp(10)));
+        l.addView(Ui.texte(this, k.optString("nom"), 15.5f, Ui.TEXTE, true), Ui.poids(1));
+        boolean ok = x.optBoolean("ok");
+        l.addView(ok ? Ui.puce(this, "À jour", Ui.VERT_PALE, Ui.VERT_TEXTE)
+                : Ui.puce(this, "Reste " + Ui.nombre(x.optDouble("r", 0)), Ui.ROUGE_PALE, Ui.ROUGE));
+        c.addView(l);
+        double a = x.optDouble("a", 0), t = x.optDouble("t", 0);
+        c.addView(Ui.texte(this, "Versé " + Ui.argent(t, monnaie()) + (a > 0 ? " sur " + Ui.argent(a, monnaie()) : ""),
+                13.5f, Ui.DOUX, false), Ui.large(Ui.dp(6)));
+        c.addView(Ui.barre(this, a > 0 ? t / a : (ok ? 1 : 0), ok ? Ui.VERT_TEXTE : teinte));
+
+        // détail par période, à déplier
+        final LinearLayout grille = Ui.colonne(this);
+        grille.setVisibility(View.GONE);
+        JSONArray cols = k.optJSONArray("colonnes"), v = x.optJSONArray("v");
+        LinearLayout rang = null;
+        for (int j = 0; cols != null && j < cols.length(); j++) {
+            if (j % 4 == 0) {
+                rang = Ui.ligne(this);
+                grille.addView(rang, Ui.large(Ui.dp(8)));
             }
+            double m = v == null || v.isNull(j) ? 0 : v.optDouble(j, 0);
+            LinearLayout cel = Ui.colonne(this);
+            cel.setGravity(Gravity.CENTER_HORIZONTAL);
+            cel.setPadding(Ui.dp(4), Ui.dp(7), Ui.dp(4), Ui.dp(7));
+            cel.setBackground(Ui.arrondi(m > 0 ? Ui.VERT_PALE : Ui.PISTE, Ui.dp(10)));
+            cel.addView(Ui.texte(this, abrege(cols.optString(j)), 11, Ui.DOUX, true));
+            cel.addView(Ui.texte(this, m > 0 ? Ui.nombre(m) : "–", 13, m > 0 ? Ui.VERT_TEXTE : Ui.DOUX, true));
+            LinearLayout.LayoutParams lp = Ui.poids(1);
+            lp.setMargins(Ui.dp(3), 0, Ui.dp(3), 0);
+            if (rang != null) rang.addView(cel, lp);
+        }
+        if (rang != null) {
+            int manque = (4 - cols.length() % 4) % 4;
+            for (int z = 0; z < manque; z++) rang.addView(new View(this), Ui.poids(1));
+        }
+        c.addView(grille);
+        final TextView voir = Ui.texte(this, "Détail des versements  ▾", 13, Ui.VERT_TEXTE, true);
+        voir.setPadding(0, Ui.dp(10), 0, 0);
+        c.addView(voir);
+        c.setOnClickListener(w -> {
+            boolean ouvrir = grille.getVisibility() != View.VISIBLE;
+            grille.setVisibility(ouvrir ? View.VISIBLE : View.GONE);
+            voir.setText(ouvrir ? "Masquer le détail  ▴" : "Détail des versements  ▾");
         });
-        web.setWebChromeClient(new WebChromeClient());
-        // Reçus et documents PDF : ouverts par le téléphone
-        web.setDownloadListener((url, agent, disposition, type, taille) -> ouvrirExterne(Uri.parse(url)));
-        racine.addView(web, plein());
-
-        chargement = new ProgressBar(this, null, android.R.attr.progressBarStyleHorizontal);
-        chargement.setIndeterminate(true);
-        FrameLayout.LayoutParams lp = new FrameLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT, dp(4), Gravity.TOP);
-        racine.addView(chargement, lp);
-        chargement.setVisibility(View.GONE);
+        return c;
     }
 
-    /** Les pages de l'association restent dans l'appli ; le reste (appel, WhatsApp, PDF…) s'ouvre à part. */
-    private boolean externe(Uri u) {
-        String schema = u.getScheme() == null ? "" : u.getScheme();
-        String hote = u.getHost() == null ? "" : u.getHost();
-        if ((schema.equals("https") || schema.equals("http"))
-                && (hote.equals("script.google.com") || hote.endsWith(".googleusercontent.com")
-                || hote.equals("accounts.google.com"))) {
-            return false;
+    // ================================================================== REÇUS
+    private void pageRecus(LinearLayout page) {
+        JSONArray rc = aFinances() ? M.optJSONObject("moi").optJSONArray("rc") : null;
+        int n = rc == null ? 0 : rc.length();
+        titre(page, "Mes reçus", n == 0 ? "" : n + " reçu" + (n > 1 ? "s" : "") + " pour l'exercice");
+        LinearLayout corps = marge(page);
+        bandeauEtat(corps);
+        if (!aFinances()) {
+            inviterAccesComplet(corps, "Vos reçus sont visibles avec le lien personnel de votre dossier ou votre identifiant.");
+            return;
         }
-        ouvrirExterne(u);
-        return true;
+        if (n == 0) {
+            LinearLayout v = Ui.colonne(this);
+            v.setGravity(Gravity.CENTER_HORIZONTAL);
+            v.setPadding(Ui.dp(20), Ui.dp(50), Ui.dp(20), Ui.dp(20));
+            v.addView(rondIcone(Icone.RECU, Ui.VERT_PALE, Ui.VERT_TEXTE, Ui.dp(72)));
+            TextView t = Ui.texte(this, "Aucun reçu pour l'instant", 17, Ui.TEXTE, true);
+            t.setPadding(0, Ui.dp(14), 0, Ui.dp(4));
+            v.addView(t);
+            TextView s = Ui.texte(this, "Chaque paiement enregistré par le trésorier apparaîtra ici.", 14, Ui.DOUX, false);
+            s.setGravity(Gravity.CENTER);
+            v.addView(s);
+            corps.addView(v);
+            return;
+        }
+        for (int i = n - 1; i >= 0; i--) corps.addView(carteRecu(rc.optJSONObject(i)), Ui.large(Ui.dp(10)));
     }
 
-    private void ouvrirExterne(Uri u) {
+    private View carteRecu(JSONObject r) {
+        LinearLayout c = Ui.carte(this);
+        if (r == null) return c;
+        boolean annule = r.optInt("x", 0) == 1;
+        LinearLayout l = Ui.ligne(this);
+        l.addView(rondIcone(Icone.RECU, annule ? Ui.ROUGE_PALE : Ui.VERT_PALE, annule ? Ui.ROUGE : Ui.VERT_TEXTE, Ui.dp(42)));
+        l.addView(Ui.espace(this, Ui.dp(12)));
+        LinearLayout t = Ui.colonne(this);
+        t.addView(Ui.texte(this, "Reçu n° " + r.optString("n"), 15.5f, Ui.TEXTE, true));
+        String mode = r.optString("m", "");
+        t.addView(Ui.texte(this, Ui.date(r.optString("d")) + (mode.isEmpty() ? "" : " · " + mode), 13, Ui.DOUX, false));
+        l.addView(t, Ui.poids(1));
+        TextView mt = Ui.texte(this, Ui.argent(r.optDouble("t", 0), monnaie()), 15.5f, annule ? Ui.DOUX : Ui.VERT_TEXTE, true);
+        if (annule) mt.setPaintFlags(mt.getPaintFlags() | Paint.STRIKE_THRU_TEXT_FLAG);
+        l.addView(mt);
+        c.addView(l);
+        JSONArray lignes = r.optJSONArray("l");
+        if (lignes != null && lignes.length() > 0) {
+            LinearLayout d = Ui.colonne(this);
+            d.setPadding(Ui.dp(54), Ui.dp(6), 0, 0);
+            for (int i = 0; i < lignes.length(); i++) d.addView(Ui.texte(this, "• " + lignes.optString(i), 13, Ui.TEXTE, false));
+            c.addView(d);
+        }
+        if (annule) {
+            LinearLayout p = Ui.ligne(this);
+            p.setPadding(Ui.dp(54), Ui.dp(8), 0, 0);
+            p.addView(Ui.puce(this, "Reçu annulé", Ui.ROUGE_PALE, Ui.ROUGE));
+            c.addView(p);
+        }
+        return c;
+    }
+
+    // ================================================================== CARTE DE MEMBRE
+    private void pageCarte(LinearLayout page) {
+        titre(page, "Ma carte de membre", "À présenter sur demande");
+        LinearLayout corps = marge(page);
+        bandeauEtat(corps);
+        JSONObject moi = M == null ? null : M.optJSONObject("moi");
+        JSONObject asso = M == null ? null : M.optJSONObject("asso");
+        if (moi == null || asso == null) {
+            inviterAccesComplet(corps, "Scannez le code QR de votre carte de membre ou de votre dossier.");
+            return;
+        }
+        // la carte garde toujours ses couleurs de carte imprimée (claire), même en mode sombre
+        int encre = 0xFF1A2420, gris = 0xFF5D6E66;
+        LinearLayout carte = Ui.colonne(this);
+        carte.setBackground(Ui.bordure(Color.WHITE, 0xFFD5E2DA, Ui.dp(18)));
+        carte.setElevation(Ui.dp(6));
+        carte.setClipToOutline(true);
+
+        LinearLayout bande = Ui.ligne(this);
+        GradientDrawable g = new GradientDrawable(GradientDrawable.Orientation.LEFT_RIGHT, new int[]{Ui.VERT, Ui.VERT_FONCE});
+        g.setCornerRadii(new float[]{Ui.dp(18), Ui.dp(18), Ui.dp(18), Ui.dp(18), 0, 0, 0, 0});
+        bande.setBackground(g);
+        bande.setPadding(Ui.dp(16), Ui.dp(14), Ui.dp(16), Ui.dp(14));
+        ImageView logo = new ImageView(this);
+        Bitmap bl = Ui.image(asso.optString("logo", ""));
+        logo.setImageBitmap(bl != null ? Ui.rond(bl, Ui.dp(40)) : Ui.initiales("A", Ui.dp(40)));
+        bande.addView(logo, new LinearLayout.LayoutParams(Ui.dp(40), Ui.dp(40)));
+        bande.addView(Ui.espace(this, Ui.dp(12)));
+        LinearLayout tb = Ui.colonne(this);
+        tb.addView(Ui.texte(this, asso.optString("nom", ""), 14.5f, Color.WHITE, true));
+        TextView ct = Ui.texte(this, "CARTE DE MEMBRE · " + asso.optString("exercice", ""), 11.5f, Ui.OR, true);
+        ct.setLetterSpacing(0.08f);
+        tb.addView(ct);
+        bande.addView(tb, Ui.poids(1));
+        carte.addView(bande);
+
+        LinearLayout milieu = Ui.ligne(this);
+        milieu.setGravity(Gravity.TOP);
+        milieu.setPadding(Ui.dp(16), Ui.dp(16), Ui.dp(16), Ui.dp(8));
+        ImageView photo = new ImageView(this);
+        Bitmap bp = Ui.image(moi.optString("photo", ""));
+        photo.setImageBitmap(bp != null ? Ui.rond(bp, Ui.dp(88))
+                : Ui.initiales(Ui.initialesDe(moi.optString("prenoms"), moi.optString("nom")), Ui.dp(88)));
+        milieu.addView(photo, new LinearLayout.LayoutParams(Ui.dp(88), Ui.dp(88)));
+        milieu.addView(Ui.espace(this, Ui.dp(14)));
+        LinearLayout champs = Ui.colonne(this);
+        champ(champs, "Nom", moi.optString("nom"), encre, gris, true);
+        champ(champs, "Prénoms", moi.optString("prenoms"), encre, gris, true);
+        champ(champs, "N° membre", moi.optString("i"), encre, gris, false);
+        milieu.addView(champs, Ui.poids(1));
+        carte.addView(milieu);
+
+        LinearLayout bas = Ui.ligne(this);
+        bas.setGravity(Gravity.TOP);
+        bas.setPadding(Ui.dp(16), 0, Ui.dp(16), Ui.dp(14));
+        LinearLayout gauche = Ui.colonne(this);
+        String genre = "H".equals(moi.optString("genre")) ? "Homme" : "F".equals(moi.optString("genre")) ? "Femme" : "";
+        if (!genre.isEmpty()) champ(gauche, "Genre", genre, encre, gris, false);
+        champ(gauche, "Fonction", moi.optString("fonction", ""), encre, gris, false);
+        champ(gauche, asso.optString("libelleResidence", "Quartier").replaceAll("(?i)\\s*/.*$", ""), moi.optString("residence", ""), encre, gris, false);
+        champ(gauche, "Adhésion", Ui.date(moi.optString("dateAdhesion", "")), encre, gris, false);
+        bas.addView(gauche, Ui.poids(1));
+        Bitmap qr = qrCarte();
+        if (qr != null) {
+            ImageView q = new ImageView(this);
+            q.setImageBitmap(qr);
+            q.setBackgroundColor(Color.WHITE);
+            bas.addView(q, new LinearLayout.LayoutParams(Ui.dp(118), Ui.dp(118)));
+        }
+        carte.addView(bas);
+
+        LinearLayout pied = Ui.ligne(this);
+        pied.setBackgroundColor(moi.optBoolean("actif", true) ? 0xFFFFF4D6 : 0xFFFDECEA);
+        pied.setPadding(Ui.dp(16), Ui.dp(8), Ui.dp(16), Ui.dp(8));
+        pied.addView(Ui.texte(this, moi.optBoolean("actif", true) ? "Membre actif" : "Membre inactif", 12.5f,
+                moi.optBoolean("actif", true) ? 0xFF8A6400 : Ui.ROUGE, true), Ui.poids(1));
+        pied.addView(Ui.texte(this, "Valable pour l'exercice " + asso.optString("exercice", ""), 12, gris, false));
+        carte.addView(pied);
+        corps.addView(carte, Ui.large(Ui.dp(10)));
+
+        TextView aide = Ui.texte(this, qr != null
+                ? "Le code QR ouvre votre fiche d'identité et les numéros d'urgence de l'association, sans aucune information financière. L'écran est mis à pleine luminosité pour faciliter sa lecture."
+                : "Le code QR de la carte apparaîtra après la prochaine actualisation (le trésorier doit avoir créé les cartes).",
+                12.5f, Ui.DOUX, false);
+        aide.setPadding(Ui.dp(4), Ui.dp(14), Ui.dp(4), 0);
+        corps.addView(aide);
+    }
+
+    private void champ(LinearLayout parent, String titre, String valeur, int encre, int gris, boolean fort) {
+        if (valeur == null || valeur.trim().isEmpty()) return;
+        LinearLayout l = Ui.colonne(this);
+        TextView t = Ui.texte(this, titre.toUpperCase(Locale.FRANCE), 10, gris, true);
+        t.setLetterSpacing(0.06f);
+        l.addView(t);
+        l.addView(Ui.texte(this, valeur, fort ? 16 : 14, encre, fort));
+        parent.addView(l, Ui.large(Ui.dp(6)));
+    }
+
+    private Bitmap qrCarte() {
+        String jc = donnees.jetonCarte();
+        if (jc == null && M != null) jc = M.optString("jetonCarte", null);
+        if (jc == null || donnees.base() == null) return null;
         try {
-            Intent i = "intent".equals(u.getScheme())
-                    ? Intent.parseUri(u.toString(), Intent.URI_INTENT_SCHEME)
-                    : new Intent(Intent.ACTION_VIEW, u);
-            i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
-            startActivity(i);
+            String texte = donnees.base() + "?v=carte&t=" + Uri.encode(jc);
+            Map<EncodeHintType, Object> h = new EnumMap<>(EncodeHintType.class);
+            h.put(EncodeHintType.MARGIN, 1);
+            BitMatrix m = new QRCodeWriter().encode(texte, BarcodeFormat.QR_CODE, 360, 360, h);
+            int w = m.getWidth(), ht = m.getHeight();
+            int[] px = new int[w * ht];
+            for (int y = 0; y < ht; y++) for (int x = 0; x < w; x++) px[y * w + x] = m.get(x, y) ? 0xFF0C2B1E : 0xFFFFFFFF;
+            return Bitmap.createBitmap(px, w, ht, Bitmap.Config.ARGB_8888);
         } catch (Exception e) {
-            message("Impossible d'ouvrir ce lien sur ce téléphone.");
+            return null;
         }
     }
 
-    private void ouvrir(String url) {
-        retirer(accueil);
-        accueil = null;
-        retirer(horsLigne);
-        horsLigne = null;
-        web.setVisibility(View.VISIBLE);
-        web.getSettings().setCacheMode(enLigne()
-                ? WebSettings.LOAD_DEFAULT : WebSettings.LOAD_CACHE_ELSE_NETWORK);
-        web.loadUrl(url);
+    // ================================================================== ASSOCIATION
+    private void pageAsso(LinearLayout page) {
+        JSONObject asso = M == null ? null : M.optJSONObject("asso");
+        titre(page, asso == null ? "Association" : asso.optString("nom", "Association"),
+                asso == null ? "" : "Exercice " + asso.optString("exercice", "") + (asso.optString("siege", "").isEmpty() ? "" : " · " + asso.optString("siege")));
+        LinearLayout corps = marge(page);
+        bandeauEtat(corps);
+
+        // urgence
+        JSONArray u = asso == null ? null : asso.optJSONArray("urgence");
+        if (u != null && u.length() > 0) {
+            section(corps, "En cas d'urgence");
+            for (int i = 0; i < u.length(); i++) {
+                JSONObject x = u.optJSONObject(i);
+                if (x == null) continue;
+                corps.addView(carteContact(x), Ui.large(i == 0 ? 0 : Ui.dp(10)));
+            }
+        }
+
+        // l'association en chiffres
+        JSONObject tab = AS == null ? null : AS.optJSONObject("tableau");
+        section(corps, "L'association en chiffres");
+        if (tab == null) {
+            LinearLayout c = Ui.carte(this);
+            c.addView(Ui.texte(this, "Effectifs, cotisations encaissées, dons, dépenses et solde de l'association sont visibles "
+                    + "avec votre identifiant de membre et votre code personnel (4 chiffres, remis par le bureau).", 13.5f, Ui.DOUX, false));
+            if (donnees.base() != null) c.addView(bouton("Me connecter", true, v -> connexion()), Ui.large(Ui.dp(12)));
+            corps.addView(c);
+        } else {
+            String mon = monnaie();
+            JSONObject eff = tab.optJSONObject("effectifs");
+            LinearLayout r1 = Ui.ligne(this);
+            r1.addView(tuile("Membres actifs", eff == null ? "–" : String.valueOf(eff.optInt("total")),
+                    eff == null ? "" : eff.optInt("H") + " H · " + eff.optInt("F") + " F", Ui.VERT_TEXTE), Ui.poids(1));
+            r1.addView(Ui.espace(this, Ui.dp(10)));
+            r1.addView(tuile("Solde", Ui.nombre(tab.optDouble("solde", 0)), mon, tab.optDouble("solde", 0) < 0 ? Ui.ROUGE : Ui.VERT_TEXTE), Ui.poids(1));
+            corps.addView(r1);
+            LinearLayout r2 = Ui.ligne(this);
+            r2.addView(tuile("Cotisations", Ui.nombre(tab.optDouble("totalCotisations", 0)), mon, Ui.TEXTE), Ui.poids(1));
+            r2.addView(Ui.espace(this, Ui.dp(10)));
+            r2.addView(tuile("Dons", Ui.nombre(tab.optDouble("dons", 0)), mon, Ui.TEXTE), Ui.poids(1));
+            r2.addView(Ui.espace(this, Ui.dp(10)));
+            r2.addView(tuile("Dépenses", Ui.nombre(tab.optDouble("depenses", 0)), mon, Ui.TEXTE), Ui.poids(1));
+            corps.addView(r2, Ui.large(Ui.dp(10)));
+
+            JSONArray cots = AS.optJSONArray("cotisations");
+            if (cots != null && cots.length() > 0) {
+                LinearLayout c = Ui.carte(this);
+                c.addView(Ui.texte(this, "Membres à jour, par cotisation", 15, Ui.TEXTE, true));
+                for (int i = 0; i < cots.length(); i++) {
+                    JSONObject k = cots.optJSONObject(i);
+                    JSONObject r = k == null ? null : k.optJSONObject("resume");
+                    if (r == null) continue;
+                    LinearLayout l = Ui.ligne(this);
+                    l.addView(Ui.texte(this, k.optString("nom"), 13.5f, Ui.TEXTE, false), Ui.poids(1));
+                    l.addView(Ui.texte(this, Math.round(r.optDouble("taux", 0) * 100) + " %", 13.5f, Ui.TEXTE, true));
+                    c.addView(l, Ui.large(Ui.dp(12)));
+                    c.addView(Ui.barre(this, r.optDouble("taux", 0), Ui.couleur(k.optString("couleur"), Ui.VERT)));
+                }
+                corps.addView(c, Ui.large(Ui.dp(10)));
+            }
+        }
+
+        // plus
+        section(corps, "Plus");
+        LinearLayout reg = Ui.carte(this);
+        reg.setPadding(Ui.dp(6), Ui.dp(4), Ui.dp(6), Ui.dp(4));
+        reglage(reg, Icone.LIEN, "Ouvrir l'espace complet sur le site", null, v -> ouvrirSite(lienSite()));
+        reglage(reg, Icone.CADENAS, "Verrouiller l'appli par un code", donnees.aUnCode() ? "Activé" : "Désactivé", v -> reglerCode());
+        reglage(reg, Icone.ACTUALISER, "Actualiser maintenant", donnees.memoriseLe() > 0 ? "Dernière fois : " + Ui.moment(donnees.memoriseLe()) : null, v -> rafraichir(true));
+        reglage(reg, Icone.QR, "Scanner un autre code QR", null, v -> scanner());
+        reglage(reg, Icone.BOUCLIER, "Rechercher une mise à jour de l'appli", "Version " + BuildConfig.VERSION_NAME, v -> verifierMaj(true));
+        reglage(reg, Icone.PERSONNE, "Changer de membre ou d'association", null, v -> oublier());
+        corps.addView(reg);
+
+        TextView cr = Ui.texte(this, "AMEDIS Asso " + BuildConfig.VERSION_NAME + "\nConception : M. KAMAGATE, Inspecteur d'Orientation, CIO Bouaké 2.\n"
+                + "Consultation seulement : aucune donnée ne peut être modifiée depuis l'appli.", 12, Ui.DOUX, false);
+        cr.setGravity(Gravity.CENTER);
+        cr.setPadding(Ui.dp(8), Ui.dp(22), Ui.dp(8), 0);
+        corps.addView(cr);
     }
 
-    // ------------------------------------------------------------------ liens de l'association
-    /** Accepte un lien AMEDIS pro Asso (code QR scanné, lien collé ou partagé). */
+    private View carteContact(JSONObject x) {
+        LinearLayout c = Ui.carte(this);
+        LinearLayout l = Ui.ligne(this);
+        l.addView(rondIcone(Icone.TEL, Ui.ROUGE_PALE, Ui.ROUGE, Ui.dp(44)));
+        l.addView(Ui.espace(this, Ui.dp(12)));
+        LinearLayout t = Ui.colonne(this);
+        t.addView(Ui.etiquette(this, x.optString("role")));
+        if (!x.optString("nom").isEmpty()) t.addView(Ui.texte(this, x.optString("nom"), 15, Ui.TEXTE, true));
+        TextView tel = Ui.texte(this, x.optString("tel"), 15, Ui.TEXTE, false);
+        tel.setTextIsSelectable(true);
+        t.addView(tel);
+        l.addView(t, Ui.poids(1));
+        c.addView(l);
+        LinearLayout b = Ui.ligne(this);
+        final String num = x.optString("tel");
+        View appeler = bouton("Appeler", true, v -> ouvrirExterne(Uri.parse("tel:" + num.replaceAll("[^\\d+]", ""))));
+        b.addView(appeler, Ui.poids(1));
+        b.addView(Ui.espace(this, Ui.dp(10)));
+        b.addView(bouton("WhatsApp", false, v -> {
+            String w = numeroWhatsApp(num);
+            if (w.isEmpty()) message("Numéro WhatsApp non reconnu.");
+            else ouvrirExterne(Uri.parse("https://wa.me/" + w));
+        }), Ui.poids(1));
+        c.addView(b, Ui.large(Ui.dp(12)));
+        return c;
+    }
+
+    private View tuile(String titre, String valeur, String unite, int couleur) {
+        LinearLayout c = Ui.carte(this);
+        c.setPadding(Ui.dp(12), Ui.dp(12), Ui.dp(12), Ui.dp(12));
+        c.addView(Ui.etiquette(this, titre));
+        TextView v = Ui.texte(this, valeur, 19, couleur, true);
+        v.setPadding(0, Ui.dp(4), 0, 0);
+        c.addView(v);
+        if (unite != null && !unite.isEmpty()) c.addView(Ui.texte(this, unite, 11.5f, Ui.DOUX, false));
+        return c;
+    }
+
+    private void reglage(LinearLayout parent, int icone, String titre, String sous, View.OnClickListener action) {
+        LinearLayout l = Ui.ligne(this);
+        l.setPadding(Ui.dp(10), Ui.dp(12), Ui.dp(10), Ui.dp(12));
+        l.addView(new Icone(this, icone, Ui.VERT_TEXTE), new LinearLayout.LayoutParams(Ui.dp(22), Ui.dp(22)));
+        l.addView(Ui.espace(this, Ui.dp(14)));
+        LinearLayout t = Ui.colonne(this);
+        t.addView(Ui.texte(this, titre, 15, Ui.TEXTE, false));
+        if (sous != null) t.addView(Ui.texte(this, sous, 12.5f, Ui.DOUX, false));
+        l.addView(t, Ui.poids(1));
+        l.addView(Ui.texte(this, "›", 20, Ui.DOUX, false));
+        l.setOnClickListener(action);
+        parent.addView(l);
+    }
+
+    // ================================================================== ÉCRAN DE BIENVENUE
+    private void montrerBienvenue() {
+        retirer(bienvenue);
+        ScrollView defil = new ScrollView(this);
+        defil.setFillViewport(true);
+        defil.setBackground(new GradientDrawable(GradientDrawable.Orientation.TOP_BOTTOM, new int[]{Ui.VERT, Ui.VERT_FONCE}));
+        LinearLayout col = Ui.colonne(this);
+        col.setGravity(Gravity.CENTER_HORIZONTAL);
+        col.setPadding(Ui.dp(26), Ui.dp(48), Ui.dp(26), Ui.dp(28));
+        defil.addView(col);
+
+        ImageView logo = new ImageView(this);
+        logo.setImageResource(R.mipmap.ic_launcher);
+        col.addView(logo, new LinearLayout.LayoutParams(Ui.dp(96), Ui.dp(96)));
+        TextView t = Ui.texte(this, "AMEDIS Asso", 30, Color.WHITE, true);
+        t.setPadding(0, Ui.dp(14), 0, 0);
+        col.addView(t);
+        col.addView(Ui.texte(this, "Votre association dans votre poche", 16, Ui.OR, true));
+
+        LinearLayout atouts = Ui.colonne(this);
+        atouts.setPadding(0, Ui.dp(26), 0, Ui.dp(10));
+        atout(atouts, Icone.OK, "Mes cotisations", "Ce que vous avez versé, ce qu'il reste, mois par mois.");
+        atout(atouts, Icone.RECU, "Mes reçus", "Tous vos reçus de paiement, toujours à portée de main.");
+        atout(atouts, Icone.CARTE, "Ma carte de membre", "Une carte numérique avec son code QR, à présenter.");
+        atout(atouts, Icone.TEL, "Urgence", "Président, secrétaire général et trésorier en un toucher.");
+        atout(atouts, Icone.NUAGE, "Même sans Internet", "Les dernières informations restent consultables.");
+        col.addView(atouts, Ui.large(0));
+
+        col.addView(bouton("Scanner un code QR", true, v -> scanner()), Ui.large(Ui.dp(14)));
+        TextView coller = Ui.texte(this, "Coller le lien reçu par WhatsApp", 15, Color.WHITE, true);
+        coller.setGravity(Gravity.CENTER);
+        coller.setPadding(Ui.dp(16), Ui.dp(13), Ui.dp(16), Ui.dp(13));
+        coller.setBackground(Ui.bordure(0x22FFFFFF, 0x66FFFFFF, Ui.dp(12)));
+        coller.setOnClickListener(v -> collerLien());
+        col.addView(coller, Ui.large(Ui.dp(10)));
+
+        View ressort = new View(this);
+        col.addView(ressort, new LinearLayout.LayoutParams(1, 0, 1f));
+        TextView cr = Ui.texte(this, "Consultation seulement : rien ne peut être modifié depuis l'appli.\n"
+                + "Conception : M. KAMAGATE, Inspecteur d'Orientation, CIO Bouaké 2.", 12, 0xFFA9CDB9, false);
+        cr.setGravity(Gravity.CENTER);
+        cr.setPadding(0, Ui.dp(26), 0, 0);
+        col.addView(cr);
+
+        bienvenue = defil;
+        racine.addView(bienvenue, plein());
+        apparition(col);
+        luminosite();
+    }
+
+    private void atout(LinearLayout parent, int icone, String titre, String texte) {
+        LinearLayout l = Ui.ligne(this);
+        l.setPadding(0, Ui.dp(8), 0, Ui.dp(8));
+        FrameLayout f = new FrameLayout(this);
+        f.setBackground(Ui.arrondi(0x26FFFFFF, Ui.dp(20)));
+        f.addView(new Icone(this, icone, Ui.OR), new FrameLayout.LayoutParams(Ui.dp(22), Ui.dp(22), Gravity.CENTER));
+        l.addView(f, new LinearLayout.LayoutParams(Ui.dp(40), Ui.dp(40)));
+        l.addView(Ui.espace(this, Ui.dp(14)));
+        LinearLayout t = Ui.colonne(this);
+        t.addView(Ui.texte(this, titre, 15.5f, Color.WHITE, true));
+        t.addView(Ui.texte(this, texte, 13.5f, 0xFFCFE7DA, false));
+        l.addView(t, Ui.poids(1));
+        parent.addView(l);
+    }
+
+    // ================================================================== liens, scan, connexion
     private boolean recevoirLien(String texte) {
-        Matcher m = LIEN.matcher(texte == null ? "" : texte);
-        if (!m.find()) {
+        String quoi = donnees.enregistrerLien(texte);
+        if (quoi == null) {
             new AlertDialog.Builder(this)
                     .setTitle("Code non reconnu")
                     .setMessage("Ce n'est pas un lien de l'espace des membres AMEDIS pro Asso.\n\n"
-                            + "Scannez le code QR de votre carte de membre, le code QR personnel de "
-                            + "votre dossier, ou collez le lien reçu par WhatsApp.")
+                            + "Scannez le code QR de votre carte de membre, celui de votre dossier ou celui de l'espace des membres, "
+                            + "ou collez le lien reçu par WhatsApp.")
                     .setPositiveButton("Compris", null)
                     .show();
             return false;
         }
-        String lien = m.group();
-        String base = lien.substring(0, lien.indexOf("/exec") + 5);
-        SharedPreferences.Editor ed = prefs.edit().putString("base", base);
-        if (lien.contains("v=perso")) ed.putString("perso", lien);
-        else if (lien.contains("v=carte")) ed.putString("carte", lien);
-        ed.apply();
-        message("Lien enregistré : l'appli s'ouvrira directement sur votre espace.");
-        ouvrir(lien);
-        invalidateOptionsMenu();
+        retirer(bienvenue);
+        bienvenue = null;
+        if ("groupe".equals(quoi) && !donnees.connu()) {
+            M = null;
+            onglet = T_ACCUEIL;
+            afficher();
+            connexion();
+            return true;
+        }
+        onglet = "carte".equals(quoi) && donnees.jetonPerso() == null && donnees.ident() == null ? T_CARTE : T_ACCUEIL;
+        majBarre();
+        if (M == null) M = donnees.membreMemorise();
+        afficher();
+        rafraichir(true);
+        if ("groupe".equals(quoi)) connexion();
+        luminosite();
         return true;
-    }
-
-    private String pageDeDepart() {
-        String perso = prefs.getString("perso", null);
-        if (perso != null) return perso;
-        String carte = prefs.getString("carte", null);
-        if (carte != null) return carte;
-        String base = prefs.getString("base", null);
-        return base == null ? null : base + "?v=membre";
     }
 
     private void scanner() {
@@ -250,10 +933,9 @@ public class MainActivity extends Activity {
             GmsBarcodeScanner lecteur = GmsBarcodeScanning.getClient(this, options);
             lecteur.startScan()
                     .addOnSuccessListener(code -> recevoirLien(code.getRawValue()))
-                    .addOnFailureListener(e -> message(
-                            "Lecture du code QR impossible sur ce téléphone : utilisez « Coller le lien reçu »."));
+                    .addOnFailureListener(e -> message("Lecture du code QR impossible sur ce téléphone : collez plutôt le lien reçu."));
         } catch (Exception e) {
-            message("Lecture du code QR impossible sur ce téléphone : utilisez « Coller le lien reçu ».");
+            message("Lecture du code QR impossible sur ce téléphone : collez plutôt le lien reçu.");
         }
     }
 
@@ -266,154 +948,334 @@ public class MainActivity extends Activity {
             ClipData clip = pp == null ? null : pp.getPrimaryClip();
             if (clip != null && clip.getItemCount() > 0) {
                 CharSequence t = clip.getItemAt(0).coerceToText(this);
-                if (t != null && LIEN.matcher(t).find()) champ.setText(t);
+                if (t != null && Donnees.LIEN.matcher(t).find()) champ.setText(t);
             }
         } catch (Exception ignore) { /* presse-papiers indisponible */ }
-        FrameLayout cadre = new FrameLayout(this);
-        cadre.setPadding(dp(20), dp(8), dp(20), 0);
-        cadre.addView(champ);
         new AlertDialog.Builder(this)
                 .setTitle("Coller le lien reçu")
-                .setMessage("Dans WhatsApp, appuyez longuement sur le message contenant le lien, "
-                        + "choisissez « Copier », puis collez-le ici.")
-                .setView(cadre)
+                .setMessage("Dans WhatsApp, appuyez longuement sur le message qui contient le lien, choisissez « Copier », puis collez-le ici.")
+                .setView(encadrer(champ))
                 .setPositiveButton("Ouvrir", (d, w) -> recevoirLien(champ.getText().toString()))
                 .setNegativeButton("Annuler", null)
                 .show();
     }
 
-    // ------------------------------------------------------------------ écrans natifs
-    private void montrerAccueil() {
-        retirer(accueil);
-        web.setVisibility(View.GONE);
-
-        ScrollView defil = new ScrollView(this);
-        defil.setFillViewport(true);
-        GradientDrawable fond = new GradientDrawable(GradientDrawable.Orientation.TOP_BOTTOM,
-                new int[]{VERT, VERT_FONCE});
-        defil.setBackground(fond);
-
-        LinearLayout col = new LinearLayout(this);
-        col.setOrientation(LinearLayout.VERTICAL);
-        col.setGravity(Gravity.CENTER_HORIZONTAL);
-        col.setPadding(dp(28), dp(40), dp(28), dp(28));
-        defil.addView(col, new ViewGroup.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
-
-        ImageView logo = new ImageView(this);
-        logo.setImageResource(R.mipmap.ic_launcher);
-        col.addView(logo, new LinearLayout.LayoutParams(dp(104), dp(104)));
-
-        col.addView(texte("AMEDIS pro Asso", 28, Color.WHITE, true, dp(18)));
-        col.addView(texte("Espace des membres", 17, OR, true, dp(4)));
-        col.addView(texte("Consultez votre dossier, vos cotisations, vos reçus, votre carte de membre "
-                + "et les numéros d'urgence de l'association.", 15, 0xFFE6F1EB, false, dp(22)));
-        col.addView(texte("Pour commencer, scannez le code QR de votre carte de membre ou le code QR "
-                + "personnel de votre dossier.", 15, 0xFFE6F1EB, false, dp(12)));
-
-        col.addView(bouton("Scanner le code QR", true, v -> scanner()), largeur(dp(28)));
-        col.addView(bouton("Coller le lien reçu par WhatsApp", false, v -> collerLien()), largeur(dp(12)));
-
-        View ressort = new View(this);
-        col.addView(ressort, new LinearLayout.LayoutParams(1, 0, 1f));
-        col.addView(texte("Consultation seulement : aucune donnée ne peut être modifiée depuis l'appli.",
-                12, 0xFFA9CDB9, false, dp(28)));
-        col.addView(texte("Conception : M. KAMAGATE, Inspecteur d'Orientation, CIO Bouaké 2.",
-                12, 0xFFA9CDB9, false, dp(6)));
-
-        accueil = defil;
-        racine.addView(accueil, plein());
-    }
-
-    private void montrerHorsLigne() {
-        if (horsLigne != null) return;
-        LinearLayout col = new LinearLayout(this);
-        col.setOrientation(LinearLayout.VERTICAL);
-        col.setGravity(Gravity.CENTER);
-        col.setPadding(dp(32), dp(32), dp(32), dp(32));
-        col.setBackgroundColor(Color.WHITE);
-        col.setClickable(true);
-        col.addView(texte("Pas de connexion", 22, VERT_FONCE, true, 0));
-        col.addView(texte("Les informations de l'association ne peuvent pas être chargées pour le moment. "
-                + "Vérifiez les données mobiles ou le Wi-Fi, puis réessayez.", 15, 0xFF4A5568, false, dp(12)));
-        col.addView(bouton("Réessayer", true, v -> {
-            retirer(horsLigne);
-            horsLigne = null;
-            String url = web.getUrl();
-            ouvrir(url == null || url.startsWith("data:") || url.startsWith("about:")
-                    ? pageDeDepart() : url);
-        }), largeur(dp(24)));
-        horsLigne = col;
-        racine.addView(horsLigne, plein());
-    }
-
-    // ------------------------------------------------------------------ menu
-    @Override
-    public boolean onCreateOptionsMenu(Menu menu) {
-        menu.clear();
-        MenuItem act = menu.add(0, M_ACTUALISER, 0, "Actualiser");
-        act.setIcon(android.R.drawable.ic_popup_sync);
-        act.setShowAsAction(MenuItem.SHOW_AS_ACTION_IF_ROOM);
-        if (prefs.getString("perso", null) != null) menu.add(0, M_DOSSIER, 1, "Mon dossier");
-        if (prefs.getString("carte", null) != null) menu.add(0, M_CARTE, 2, "Ma carte de membre");
-        if (prefs.getString("base", null) != null) menu.add(0, M_ESPACE, 3, "Espace des membres");
-        menu.add(0, M_SCANNER, 4, "Scanner un code QR");
-        menu.add(0, M_MAJ, 5, "Rechercher une mise à jour");
-        menu.add(0, M_APROPOS, 6, "À propos");
-        if (prefs.getString("base", null) != null) menu.add(0, M_OUBLIER, 7, "Changer d'association");
-        return true;
-    }
-
-    @Override
-    public boolean onOptionsItemSelected(MenuItem item) {
-        switch (item.getItemId()) {
-            case M_ACTUALISER:
-                String url = web.getUrl();
-                if (url == null || accueil != null) {
-                    String d = pageDeDepart();
-                    if (d != null) ouvrir(d);
-                } else ouvrir(url);
-                return true;
-            case M_DOSSIER: ouvrir(prefs.getString("perso", "")); return true;
-            case M_CARTE: ouvrir(prefs.getString("carte", "")); return true;
-            case M_ESPACE: ouvrir(prefs.getString("base", "") + "?v=membre"); return true;
-            case M_SCANNER: scanner(); return true;
-            case M_MAJ: verifierMaj(true); return true;
-            case M_APROPOS: aPropos(); return true;
-            case M_OUBLIER:
-                new AlertDialog.Builder(this)
-                        .setTitle("Changer d'association")
-                        .setMessage("Les liens enregistrés sur ce téléphone seront effacés. "
-                                + "Vous pourrez scanner un nouveau code QR.")
-                        .setPositiveButton("Effacer", (d, w) -> {
-                            prefs.edit().remove("base").remove("perso").remove("carte").apply();
-                            CookieManager.getInstance().removeAllCookies(null);
-                            web.clearHistory();
-                            web.loadUrl("about:blank");
-                            invalidateOptionsMenu();
-                            montrerAccueil();
-                        })
-                        .setNegativeButton("Annuler", null)
-                        .show();
-                return true;
-            default:
-                return super.onOptionsItemSelected(item);
+    /** Connexion à l'espace des membres : identifiant + code personnel (5 essais, puis blocage de 15 minutes). */
+    private void connexion() {
+        if (donnees.base() == null) {
+            message("Scannez d'abord un code QR de l'association.");
+            return;
         }
-    }
-
-    private void aPropos() {
+        LinearLayout f = Ui.colonne(this);
+        final EditText id = new EditText(this);
+        id.setHint("Identifiant de membre (ex. A2B 12)");
+        id.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_FLAG_CAP_CHARACTERS);
+        if (donnees.ident() != null) id.setText(donnees.ident());
+        final EditText code = new EditText(this);
+        code.setHint("Code personnel (4 chiffres)");
+        code.setInputType(InputType.TYPE_CLASS_NUMBER | InputType.TYPE_NUMBER_VARIATION_PASSWORD);
+        f.addView(id);
+        f.addView(code);
         new AlertDialog.Builder(this)
-                .setTitle("AMEDIS pro Asso – Membres")
-                .setMessage("Version " + BuildConfig.VERSION_NAME + "\n\n"
-                        + "Espace de consultation des membres, alimenté par le logiciel AMEDIS pro Asso "
-                        + "de l'association. Consultation seulement.\n\n"
-                        + "Conception : M. KAMAGATE, Inspecteur d'Orientation, CIO Bouaké 2.")
-                .setPositiveButton("Fermer", null)
+                .setTitle("Espace des membres")
+                .setMessage("Saisissez l'identifiant et le code personnel remis par le bureau de l'association.")
+                .setView(encadrer(f))
+                .setPositiveButton("Se connecter", (d, w) -> seConnecter(id.getText().toString().trim(), code.getText().toString().trim()))
+                .setNegativeButton("Annuler", null)
                 .show();
     }
 
-    // ------------------------------------------------------------------ mises à jour de l'appli
-    /** Compare la version installée à la dernière version publiée sur GitHub (sans Play Store). */
+    private void seConnecter(final String ident, final String code) {
+        if (ident.isEmpty() || code.isEmpty()) {
+            message("Saisissez l'identifiant et le code.");
+            return;
+        }
+        enChargement(true);
+        fond.execute(() -> {
+            try {
+                final JSONObject r = donnees.essayerConnexion(ident, code);
+                ui.post(() -> {
+                    enChargement(false);
+                    if (r.optBoolean("ok")) {
+                        donnees.enregistrerConnexion(ident, code);
+                        AS = r;
+                        if (donnees.jetonPerso() == null) M = r;
+                        donnees.enregistrerJetonCarte(r.optString("jetonCarte", null));
+                        donnees.memoriser(M, AS);
+                        erreur = null;
+                        horsLigne = false;
+                        message("Connexion réussie.");
+                        afficher();
+                    } else {
+                        new AlertDialog.Builder(this).setTitle("Connexion refusée")
+                                .setMessage(r.optString("erreur", "Identifiant ou code incorrect."))
+                                .setPositiveButton("Réessayer", (d, w) -> connexion())
+                                .setNegativeButton("Fermer", null).show();
+                    }
+                });
+            } catch (Donnees.SiteAncien e) {
+                ui.post(() -> { enChargement(false); siteAncien(); });
+            } catch (Exception e) {
+                ui.post(() -> { enChargement(false); message("Pas de connexion Internet : réessayez plus tard."); });
+            }
+        });
+    }
+
+    // ================================================================== actualisation
+    private void rafraichir(final boolean manuel) {
+        if (chargement || !donnees.connu()) {
+            if (tirer != null) tirer.setRefreshing(false);
+            return;
+        }
+        enChargement(true);
+        fond.execute(() -> {
+            JSONObject m = null, a = null;
+            Exception pb = null;
+            try {
+                m = donnees.lireMembre();
+                if (donnees.ident() != null) {
+                    if (donnees.jetonPerso() == null) a = m;
+                    else try { a = donnees.lireAsso(); } catch (Exception ignore) { a = null; }
+                }
+            } catch (Exception e) {
+                pb = e;
+            }
+            final JSONObject fm = m, fa = a;
+            final Exception fpb = pb;
+            ui.post(() -> {
+                enChargement(false);
+                if (fpb instanceof Donnees.SiteAncien) {
+                    siteAncien();
+                } else if (fpb != null) {
+                    horsLigne = true;
+                    if (manuel) message("Pas de connexion Internet : informations enregistrées affichées.");
+                } else if (fm != null && fm.optBoolean("ok")) {
+                    horsLigne = false;
+                    erreur = null;
+                    M = fm;
+                    if (fa != null && fa.optBoolean("ok")) AS = fa;
+                    donnees.enregistrerJetonCarte(fm.optString("jetonCarte", null));
+                    donnees.memoriser(M, AS);
+                    nouveauxRecus();
+                    if (manuel) message("Informations à jour.");
+                } else if (fm != null) {
+                    horsLigne = false;
+                    erreur = fm.optString("erreur", "Le site n'a pas pu répondre.");
+                }
+                afficher();
+            });
+        });
+    }
+
+    private void enChargement(boolean oui) {
+        chargement = oui;
+        chargementVue.setVisibility(oui ? View.VISIBLE : View.GONE);
+        if (!oui && tirer != null) tirer.setRefreshing(false);
+    }
+
+    /** Pastille rouge sur l'onglet Reçus quand un nouveau reçu est arrivé. */
+    private void nouveauxRecus() {
+        int n = nbRecus();
+        android.content.SharedPreferences p = getSharedPreferences("amedis", MODE_PRIVATE);
+        int vus = p.getInt("recusVus", -1);
+        if (vus < 0) p.edit().putInt("recusVus", n).apply();
+        else if (n > vus) {
+            pastilleRecus.setVisibility(View.VISIBLE);
+            message(n - vus == 1 ? "Nouveau reçu disponible." : (n - vus) + " nouveaux reçus disponibles.");
+        }
+    }
+
+    private void marquerRecusVus() {
+        pastilleRecus.setVisibility(View.GONE);
+        getSharedPreferences("amedis", MODE_PRIVATE).edit().putInt("recusVus", nbRecus()).apply();
+    }
+
+    private int nbRecus() {
+        JSONObject moi = M == null ? null : M.optJSONObject("moi");
+        JSONArray rc = moi == null ? null : moi.optJSONArray("rc");
+        return rc == null ? 0 : rc.length();
+    }
+
+    private void siteAncien() {
+        new AlertDialog.Builder(this)
+                .setTitle("Site de l'association à mettre à jour")
+                .setMessage("Pour profiter de l'appli complète, le trésorier doit mettre à jour le site de l'association "
+                        + "(version 1.7.0 ou plus récente). En attendant, votre espace s'ouvre en mode site.")
+                .setPositiveButton("Ouvrir en mode site", (d, w) -> ouvrirSite(lienSite()))
+                .setNegativeButton("Fermer", null)
+                .show();
+    }
+
+    private String lienSite() {
+        String b = donnees.base();
+        if (b == null) return null;
+        if (donnees.jetonPerso() != null) return b + "?v=perso&t=" + Uri.encode(donnees.jetonPerso());
+        if (donnees.ident() != null) return b + "?v=asso";
+        if (donnees.jetonCarte() != null) return b + "?v=carte&t=" + Uri.encode(donnees.jetonCarte());
+        return b + "?v=asso";
+    }
+
+    // ================================================================== site dans l'appli (secours)
+    private void ouvrirSite(String url) {
+        if (url == null) return;
+        fermerSite();
+        LinearLayout col = Ui.colonne(this);
+        col.setBackgroundColor(Ui.FOND);
+        LinearLayout barre = Ui.ligne(this);
+        barre.setBackgroundColor(Ui.VERT_FONCE);
+        barre.setPadding(Ui.dp(14), Ui.dp(12), Ui.dp(14), Ui.dp(12));
+        TextView retour = Ui.texte(this, "←  Retour à l'appli", 15, Color.WHITE, true);
+        retour.setOnClickListener(v -> fermerSite());
+        barre.addView(retour, Ui.poids(1));
+        col.addView(barre);
+        web = new WebView(this);
+        WebSettings s = web.getSettings();
+        s.setJavaScriptEnabled(true);
+        s.setDomStorageEnabled(true);
+        CookieManager.getInstance().setAcceptCookie(true);
+        CookieManager.getInstance().setAcceptThirdPartyCookies(web, true);
+        web.setWebViewClient(new WebViewClient() {
+            @Override
+            public boolean shouldOverrideUrlLoading(WebView v, WebResourceRequest r) { return externe(r.getUrl()); }
+
+            @SuppressWarnings("deprecation")
+            @Override
+            public boolean shouldOverrideUrlLoading(WebView v, String u) { return externe(Uri.parse(u)); }
+        });
+        web.setWebChromeClient(new WebChromeClient());
+        web.setDownloadListener((u, agent, disposition, type, taille) -> ouvrirExterne(Uri.parse(u)));
+        col.addView(web, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f));
+        web.loadUrl(url);
+        site = col;
+        racine.addView(site, plein());
+        luminosite();
+    }
+
+    private void fermerSite() {
+        retirer(site);
+        site = null;
+        if (web != null) web.destroy();
+        web = null;
+        luminosite();
+    }
+
+    private boolean externe(Uri u) {
+        String sc = u.getScheme() == null ? "" : u.getScheme(), h = u.getHost() == null ? "" : u.getHost();
+        if ((sc.equals("https") || sc.equals("http")) && (h.equals("script.google.com")
+                || h.endsWith(".googleusercontent.com") || h.equals("accounts.google.com"))) return false;
+        ouvrirExterne(u);
+        return true;
+    }
+
+    private void ouvrirExterne(Uri u) {
+        try {
+            Intent i = "intent".equals(u.getScheme()) ? Intent.parseUri(u.toString(), Intent.URI_INTENT_SCHEME)
+                    : new Intent(Intent.ACTION_VIEW, u);
+            i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+            startActivity(i);
+        } catch (Exception e) {
+            message("Impossible d'ouvrir ce lien sur ce téléphone.");
+        }
+    }
+
+    // ================================================================== verrouillage par code
+    private void reglerCode() {
+        if (donnees.aUnCode()) {
+            new AlertDialog.Builder(this).setTitle("Verrouillage par code")
+                    .setMessage("Le verrouillage est activé : l'appli demande votre code à l'ouverture et après une minute en arrière-plan.")
+                    .setPositiveButton("Désactiver", (d, w) -> { donnees.retirerCode(); message("Verrouillage désactivé."); afficher(); })
+                    .setNegativeButton("Garder", null).show();
+            return;
+        }
+        LinearLayout f = Ui.colonne(this);
+        final EditText c1 = champCode("Nouveau code (4 à 6 chiffres)"), c2 = champCode("Confirmez le code");
+        f.addView(c1);
+        f.addView(c2);
+        new AlertDialog.Builder(this).setTitle("Protéger l'appli par un code")
+                .setMessage("Vos cotisations et vos reçus seront protégés si quelqu'un d'autre utilise votre téléphone.")
+                .setView(encadrer(f))
+                .setPositiveButton("Activer", (d, w) -> {
+                    String a = c1.getText().toString(), b = c2.getText().toString();
+                    if (!a.matches("\\d{4,6}")) message("Le code doit compter 4 à 6 chiffres.");
+                    else if (!a.equals(b)) message("Les deux codes sont différents.");
+                    else { donnees.definirCode(a); message("Verrouillage activé."); afficher(); }
+                })
+                .setNegativeButton("Annuler", null).show();
+    }
+
+    private EditText champCode(String indice) {
+        EditText e = new EditText(this);
+        e.setHint(indice);
+        e.setInputType(InputType.TYPE_CLASS_NUMBER | InputType.TYPE_NUMBER_VARIATION_PASSWORD);
+        return e;
+    }
+
+    private void verrouiller() {
+        if (verrouille) return;
+        verrouille = true;
+        LinearLayout col = Ui.colonne(this);
+        col.setGravity(Gravity.CENTER_HORIZONTAL);
+        col.setPadding(Ui.dp(32), Ui.dp(90), Ui.dp(32), Ui.dp(32));
+        col.setBackground(new GradientDrawable(GradientDrawable.Orientation.TOP_BOTTOM, new int[]{Ui.VERT, Ui.VERT_FONCE}));
+        col.setClickable(true);
+        FrameLayout rond = new FrameLayout(this);
+        rond.setBackground(Ui.arrondi(0x26FFFFFF, Ui.dp(40)));
+        rond.addView(new Icone(this, Icone.CADENAS, Ui.OR), new FrameLayout.LayoutParams(Ui.dp(40), Ui.dp(40), Gravity.CENTER));
+        col.addView(rond, new LinearLayout.LayoutParams(Ui.dp(80), Ui.dp(80)));
+        TextView t = Ui.texte(this, "AMEDIS Asso est verrouillée", 21, Color.WHITE, true);
+        t.setPadding(0, Ui.dp(18), 0, Ui.dp(6));
+        col.addView(t);
+        col.addView(Ui.texte(this, "Saisissez votre code pour continuer.", 14.5f, 0xFFCFE7DA, false));
+        final EditText code = champCode("Code");
+        code.setGravity(Gravity.CENTER);
+        code.setTextColor(Color.WHITE);
+        code.setHintTextColor(0x99FFFFFF);
+        code.setTextSize(24);
+        code.setLetterSpacing(0.4f);
+        col.addView(code, Ui.large(Ui.dp(24)));
+        col.addView(bouton("Déverrouiller", true, v -> {
+            if (donnees.codeJuste(code.getText().toString())) deverrouiller();
+            else { code.setText(""); message("Code incorrect."); }
+        }), Ui.large(Ui.dp(14)));
+        TextView oubli = Ui.texte(this, "Code oublié ?", 14, 0xFFCFE7DA, true);
+        oubli.setPadding(0, Ui.dp(22), 0, 0);
+        oubli.setOnClickListener(v -> new AlertDialog.Builder(this).setTitle("Code oublié")
+                .setMessage("Pour retrouver l'accès, les informations enregistrées sur ce téléphone seront effacées. "
+                        + "Vous scannerez ensuite de nouveau votre code QR.")
+                .setPositiveButton("Effacer et recommencer", (d, w) -> { donnees.toutEffacer(); deverrouiller(); M = null; AS = null; montrerBienvenue(); })
+                .setNegativeButton("Annuler", null).show());
+        col.addView(oubli);
+        verrou = col;
+        racine.addView(verrou, plein());
+    }
+
+    private void deverrouiller() {
+        verrouille = false;
+        retirer(verrou);
+        verrou = null;
+    }
+
+    private void oublier() {
+        new AlertDialog.Builder(this).setTitle("Changer de membre ou d'association")
+                .setMessage("Les liens et les informations enregistrés sur ce téléphone seront effacés. "
+                        + "Vous pourrez ensuite scanner un nouveau code QR.")
+                .setPositiveButton("Effacer", (d, w) -> {
+                    donnees.toutEffacer();
+                    getSharedPreferences("amedis", MODE_PRIVATE).edit().remove("recusVus").apply();
+                    CookieManager.getInstance().removeAllCookies(null);
+                    M = null;
+                    AS = null;
+                    erreur = null;
+                    horsLigne = false;
+                    onglet = T_ACCUEIL;
+                    majBarre();
+                    afficher();
+                    montrerBienvenue();
+                })
+                .setNegativeButton("Annuler", null).show();
+    }
+
+    // ================================================================== mise à jour de l'appli (GitHub, sans Play Store)
     private void verifierMaj(final boolean manuel) {
         final String depot = BuildConfig.DEPOT;
         if (depot == null || depot.isEmpty()) {
@@ -423,16 +1285,15 @@ public class MainActivity extends Activity {
         if (manuel) message("Recherche d'une nouvelle version…");
         new Thread(() -> {
             try {
-                HttpURLConnection c = (HttpURLConnection)
-                        new URL("https://api.github.com/repos/" + depot + "/releases/latest").openConnection();
+                HttpURLConnection c = (HttpURLConnection) new URL("https://api.github.com/repos/" + depot + "/releases/latest").openConnection();
                 c.setRequestProperty("Accept", "application/vnd.github+json");
                 c.setConnectTimeout(10000);
                 c.setReadTimeout(10000);
                 if (c.getResponseCode() != 200) throw new Exception("HTTP " + c.getResponseCode());
                 StringBuilder sb = new StringBuilder();
                 try (BufferedReader br = new BufferedReader(new InputStreamReader(c.getInputStream(), "UTF-8"))) {
-                    String ligne;
-                    while ((ligne = br.readLine()) != null) sb.append(ligne).append('\n');
+                    String l;
+                    while ((l = br.readLine()) != null) sb.append(l).append('\n');
                 }
                 JSONObject j = new JSONObject(sb.toString());
                 final String version = j.optString("tag_name", "").replaceFirst("^[vV]", "");
@@ -441,22 +1302,20 @@ public class MainActivity extends Activity {
                 JSONArray a = j.optJSONArray("assets");
                 for (int i = 0; a != null && i < a.length(); i++) {
                     JSONObject o = a.getJSONObject(i);
-                    if (o.optString("name", "").toLowerCase().endsWith(".apk")) {
+                    if (o.optString("name", "").toLowerCase(Locale.ROOT).endsWith(".apk")) {
                         apk = o.optString("browser_download_url", null);
                         break;
                     }
                 }
                 final String lienApk = apk;
-                prefs.edit().putLong("majLe", System.currentTimeMillis()).apply();
+                getSharedPreferences("amedis", MODE_PRIVATE).edit().putLong("majLe", System.currentTimeMillis()).apply();
                 runOnUiThread(() -> {
                     if (isFinishing()) return;
                     if (lienApk != null && plusRecente(version, BuildConfig.VERSION_NAME)) {
                         new AlertDialog.Builder(this)
                                 .setTitle("Nouvelle version " + version)
-                                .setMessage("Une nouvelle version de l'appli est disponible."
-                                        + (notes.isEmpty() ? "" : "\n\n" + notes)
-                                        + "\n\nTéléchargez-la puis ouvrez le fichier pour l'installer : "
-                                        + "vos liens enregistrés sont conservés.")
+                                .setMessage("Une nouvelle version de l'appli est disponible." + (notes.isEmpty() ? "" : "\n\n" + notes)
+                                        + "\n\nTéléchargez-la puis ouvrez le fichier pour l'installer : vos informations sont conservées.")
                                 .setPositiveButton("Télécharger", (d, w) -> ouvrirExterne(Uri.parse(lienApk)))
                                 .setNegativeButton("Plus tard", null)
                                 .show();
@@ -473,25 +1332,49 @@ public class MainActivity extends Activity {
     static boolean plusRecente(String a, String b) {
         String[] x = a.split("\\."), y = b.split("\\.");
         for (int i = 0; i < Math.max(x.length, y.length); i++) {
-            int u = i < x.length ? nombre(x[i]) : 0, v = i < y.length ? nombre(y[i]) : 0;
+            int u = i < x.length ? entier(x[i]) : 0, v = i < y.length ? entier(y[i]) : 0;
             if (u != v) return u > v;
         }
         return false;
     }
 
-    private static int nombre(String s) {
+    private static int entier(String s) {
         try { return Integer.parseInt(s.replaceAll("[^0-9]", "")); } catch (Exception e) { return 0; }
     }
 
-    // ------------------------------------------------------------------ outils
-    private boolean enLigne() {
-        try {
-            ConnectivityManager cm = (ConnectivityManager) getSystemService(Context.CONNECTIVITY_SERVICE);
-            @SuppressWarnings("deprecation") NetworkInfo ni = cm == null ? null : cm.getActiveNetworkInfo();
-            return ni != null && ni.isConnected();
-        } catch (Exception e) {
-            return true;
-        }
+    // ================================================================== outils
+    /** Numéro WhatsApp international (Côte d'Ivoire : 225 + 10 chiffres). */
+    static String numeroWhatsApp(String contact) {
+        String d = String.valueOf(contact).split("[/,;]| et ")[0].replaceAll("[^\\d+]", "");
+        if (d.isEmpty()) return "";
+        if (d.startsWith("+")) d = d.substring(1);
+        else if (d.startsWith("00")) d = d.substring(2);
+        if (!d.startsWith("225") || d.length() <= 10) d = "225" + d;
+        return d.length() >= 11 ? d : "";
+    }
+
+    private static String salutation() {
+        int h = java.util.Calendar.getInstance().get(java.util.Calendar.HOUR_OF_DAY);
+        return h < 12 ? "Bonjour" : h < 18 ? "Bon après-midi" : "Bonsoir";
+    }
+
+    private static String capitaliser(String s) {
+        if (s.isEmpty()) return s;
+        return s.substring(0, 1).toUpperCase(Locale.FRANCE) + s.substring(1).toLowerCase(Locale.FRANCE);
+    }
+
+    /** « JANVIER » -> « Janv », « Coti 1 » reste « Coti 1 ». */
+    private static String abrege(String s) {
+        String t = s == null ? "" : s.trim();
+        if (t.matches("(?i)[a-zàâçéèêëîïôûùüÿ]+")) return capitaliser(t.length() > 4 ? t.substring(0, 4) : t);
+        return t.length() <= 7 ? t : t.substring(0, 7);
+    }
+
+    private FrameLayout encadrer(View v) {
+        FrameLayout f = new FrameLayout(this);
+        f.setPadding(Ui.dp(20), Ui.dp(8), Ui.dp(20), 0);
+        f.addView(v);
+        return f;
     }
 
     private void retirer(View v) {
@@ -502,51 +1385,7 @@ public class MainActivity extends Activity {
         Toast.makeText(this, m, Toast.LENGTH_LONG).show();
     }
 
-    private int dp(int v) {
-        return (int) TypedValue.applyDimension(TypedValue.COMPLEX_UNIT_DIP, v, getResources().getDisplayMetrics());
-    }
-
     private FrameLayout.LayoutParams plein() {
         return new FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT);
-    }
-
-    private LinearLayout.LayoutParams largeur(int haut) {
-        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
-        lp.topMargin = haut;
-        return lp;
-    }
-
-    private TextView texte(String t, int taille, int couleur, boolean gras, int haut) {
-        TextView v = new TextView(this);
-        v.setText(t);
-        v.setTextSize(TypedValue.COMPLEX_UNIT_SP, taille);
-        v.setTextColor(couleur);
-        v.setGravity(Gravity.CENTER);
-        if (gras) v.setTypeface(Typeface.DEFAULT_BOLD);
-        v.setLineSpacing(0, 1.15f);
-        LinearLayout.LayoutParams lp = largeur(haut);
-        v.setLayoutParams(lp);
-        return v;
-    }
-
-    private Button bouton(String t, boolean principal, View.OnClickListener action) {
-        Button b = new Button(this);
-        b.setText(t);
-        b.setAllCaps(false);
-        b.setTextSize(TypedValue.COMPLEX_UNIT_SP, 16);
-        b.setTypeface(Typeface.DEFAULT_BOLD);
-        b.setTextColor(principal ? VERT_FONCE : Color.WHITE);
-        GradientDrawable f = new GradientDrawable();
-        f.setCornerRadius(dp(12));
-        if (principal) f.setColor(OR);
-        else {
-            f.setColor(0x22FFFFFF);
-            f.setStroke(dp(1), 0x66FFFFFF);
-        }
-        b.setBackground(f);
-        b.setPadding(dp(16), dp(14), dp(16), dp(14));
-        b.setOnClickListener(action);
-        return b;
     }
 }
