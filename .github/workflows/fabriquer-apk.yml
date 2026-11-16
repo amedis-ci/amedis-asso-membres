@@ -4,9 +4,9 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: "Numéro de la version (ex. 1.0.0, puis 1.0.1, 1.1.0…)"
+        description: "Numéro de la version (ex. 2.0.0, puis 2.0.1, 2.1.0…)"
         required: true
-        default: "1.0.0"
+        default: "2.0.0"
       notes:
         description: "Nouveautés de cette version (affichées sur les téléphones)"
         required: false
