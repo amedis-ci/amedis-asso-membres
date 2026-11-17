@@ -4,7 +4,7 @@ plugins {
 
 // Renseignés automatiquement par GitHub au moment de la fabrication
 def depotGithub = System.getenv('GITHUB_REPOSITORY') ?: ''
-def versionAppli = System.getenv('APP_VERSION') ?: '2.1.0'
+def versionAppli = System.getenv('APP_VERSION') ?: '2.2.0'
 def numeroFabrication = (System.getenv('GITHUB_RUN_NUMBER') ?: '1') as Integer
 def cleSignature = System.getenv('KEYSTORE_FILE')
 

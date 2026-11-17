@@ -1,7 +1,18 @@
 package ci.amedis.asso.membres;
 
 import android.app.Activity;
+import android.Manifest;
 import android.app.AlertDialog;
+import android.app.DatePickerDialog;
+import android.content.pm.PackageManager;
+import android.media.MediaPlayer;
+import android.media.MediaRecorder;
+import android.os.Build;
+import android.text.Editable;
+import android.text.TextWatcher;
+import android.util.Base64;
+import android.widget.CheckBox;
+import android.widget.ListView;
 import android.content.ClipData;
 import android.content.ClipboardManager;
 import android.content.Context;
@@ -54,6 +65,8 @@ import org.json.JSONArray;
 import org.json.JSONObject;
 
 import java.io.BufferedReader;
+import java.io.File;
+import java.io.FileOutputStream;
 import java.io.InputStreamReader;
 import java.net.HttpURLConnection;
 import java.net.URL;
@@ -64,15 +77,19 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
 /**
- * AMEDIS Asso – appli des membres. Écrans natifs alimentés par le site de l'association (lecture seule),
+ * AMEDIS Asso – appli des membres. Écrans natifs alimentés par le site de l'association, menu latéral, messagerie du bureau (écrite et vocale),
+ * gestion du trésorier (opérations appliquées par le logiciel du PC),
  * avec copie hors connexion, carte de membre numérique, numéros d'urgence et verrouillage par code.
  * Conception : M. KAMAGATE, Inspecteur d'Orientation, CIO Bouaké 2.
  */
 public class MainActivity extends Activity {
 
-    private static final int T_ACCUEIL = 0, T_RECUS = 1, T_DEMARCHES = 2, T_CARTE = 3, T_ASSO = 4, NB_ONGLETS = 5;
-    private static final String[] NOMS_ONGLETS = {"Accueil", "Reçus", "Démarches", "Ma carte", "Association"};
-    private static final int[] ICONES_ONGLETS = {Icone.MAISON, Icone.RECU, Icone.MESSAGE, Icone.CARTE, Icone.GROUPE};
+    private static final int T_ACCUEIL = 0, T_RECUS = 1, T_DEMARCHES = 2, T_CARTE = 3, T_ASSO = 4, T_MESSAGES = 5,
+            T_G_ENC = 6, T_G_DEP = 7, T_G_MEM = 8, T_G_REU = 9, T_G_SOL = 10, T_G_OPS = 11;
+    private static final String[] NOMS_MENU = {"Tableau de bord", "Mes reçus", "Mes démarches", "Ma carte", "Réglages et aide", "Messagerie",
+            "Encaisser", "Dépenses et dons", "Membres", "Réunions et appel", "Solidarité", "Opérations envoyées"};
+    private static final int[] ICONES_PAGES = {Icone.TABLEAU, Icone.RECU, Icone.MESSAGE, Icone.CARTE, Icone.REGLAGES, Icone.ENVELOPPE,
+            Icone.PIECES, Icone.LISTE, Icone.GROUPE, Icone.CALENDRIER, Icone.COEUR, Icone.ACTUALISER};
     private static final long UN_JOUR = 24L * 3600 * 1000, VERROU_APRES = 60 * 1000;
 
     private Donnees donnees;
@@ -84,8 +101,12 @@ public class MainActivity extends Activity {
 
     private FrameLayout racine, contenu;
     private ProgressBar chargementVue;
-    private final Icone[] icones = new Icone[NB_ONGLETS];
-    private final TextView[] libelles = new TextView[NB_ONGLETS];
+    private FrameLayout tiroir;
+    private LinearLayout panneau;
+    private TextView titreBarre;
+    private View pointMenu, pastilleMsg;
+    private Bureau bureau;
+    private JSONObject MSG, CTX;       // messagerie ; contexte des opérations du trésorier
     private View pastilleRecus, bienvenue, verrou, site;
     private WebView web;
     private SwipeRefreshLayout tirer;
@@ -106,6 +127,9 @@ public class MainActivity extends Activity {
         donnees = new Donnees(getSharedPreferences("amedis", MODE_PRIVATE));
         demarches = new Demarches(donnees, getSharedPreferences("amedis", MODE_PRIVATE));
         DEM = demarches.listeMemorisee();
+        bureau = new Bureau(donnees, getSharedPreferences("amedis", MODE_PRIVATE));
+        MSG = bureau.boiteMemorisee();
+        CTX = bureau.contexteMemorise();
 
         racine = new FrameLayout(this);
         racine.setBackgroundColor(Ui.FOND);
@@ -137,6 +161,7 @@ public class MainActivity extends Activity {
     protected void onPause() {
         super.onPause();
         sortieLe = System.currentTimeMillis();
+        arreterLecture();
     }
 
     @Override
@@ -154,6 +179,12 @@ public class MainActivity extends Activity {
             else fermerSite();
         } else if (verrouille) {
             moveTaskToBack(true);
+        } else if (tiroirOuvert()) {
+            fermerTiroir();
+        } else if (bienvenue == null && onglet == T_G_REU && reuSaisie != null) {
+            reuSaisie = null;
+            presences.clear();
+            afficher();
         } else if (bienvenue == null && onglet != T_ACCUEIL) {
             choisir(T_ACCUEIL);
         } else {
@@ -170,70 +201,68 @@ public class MainActivity extends Activity {
         return false;
     }
 
-    // ================================================================== structure : contenu + barre d'onglets
+    // ================================================================== structure : barre du haut + contenu + menu latéral
     private void construireAppli() {
         LinearLayout col = Ui.colonne(this);
+        LinearLayout barre = Ui.ligne(this);
+        barre.setBackgroundColor(Ui.VERT_FONCE);
+        barre.setPadding(Ui.dp(6), Ui.dp(6), Ui.dp(6), Ui.dp(6));
+        FrameLayout bm = new FrameLayout(this);
+        bm.setPadding(Ui.dp(10), Ui.dp(10), Ui.dp(10), Ui.dp(10));
+        bm.addView(new Icone(this, Icone.MENU, Color.WHITE), new FrameLayout.LayoutParams(Ui.dp(26), Ui.dp(26)));
+        pointMenu = point();
+        bm.addView(pointMenu, new FrameLayout.LayoutParams(Ui.dp(10), Ui.dp(10), Gravity.END | Gravity.TOP));
+        bm.setOnClickListener(v -> ouvrirTiroir());
+        bm.setContentDescription("Menu");
+        barre.addView(bm);
+        titreBarre = Ui.texte(this, "Tableau de bord", 18, Color.WHITE, true);
+        titreBarre.setMaxLines(1);
+        titreBarre.setEllipsize(android.text.TextUtils.TruncateAt.END);
+        titreBarre.setPadding(Ui.dp(8), 0, Ui.dp(8), 0);
+        barre.addView(titreBarre, Ui.poids(1));
+        FrameLayout ba = new FrameLayout(this);
+        ba.setPadding(Ui.dp(10), Ui.dp(10), Ui.dp(10), Ui.dp(10));
+        ba.addView(new Icone(this, Icone.ACTUALISER, Color.WHITE), new FrameLayout.LayoutParams(Ui.dp(24), Ui.dp(24)));
+        ba.setOnClickListener(v -> rafraichir(true));
+        ba.setContentDescription("Actualiser");
+        barre.addView(ba);
+        col.addView(barre);
         contenu = new FrameLayout(this);
         col.addView(contenu, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f));
-
-        View trait = new View(this);
-        trait.setBackgroundColor(Ui.LIGNE);
-        col.addView(trait, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 1));
-
-        LinearLayout barre = Ui.ligne(this);
-        barre.setBackgroundColor(Ui.CARTE);
-        barre.setPadding(0, Ui.dp(6), 0, Ui.dp(8));
-        for (int i = 0; i < NB_ONGLETS; i++) {
-            final int n = i;
-            LinearLayout b = Ui.colonne(this);
-            b.setGravity(Gravity.CENTER_HORIZONTAL);
-            FrameLayout cadre = new FrameLayout(this);
-            icones[i] = new Icone(this, ICONES_ONGLETS[i], Ui.DOUX);
-            cadre.addView(icones[i], new FrameLayout.LayoutParams(Ui.dp(26), Ui.dp(26)));
-            if (i == T_DEMARCHES) {
-                pastilleDem = new View(this);
-                pastilleDem.setBackground(Ui.arrondi(Ui.ROUGE, Ui.dp(5)));
-                pastilleDem.setVisibility(View.GONE);
-                cadre.addView(pastilleDem, new FrameLayout.LayoutParams(Ui.dp(10), Ui.dp(10), Gravity.END | Gravity.TOP));
-            }
-            if (i == T_RECUS) {
-                pastilleRecus = new View(this);
-                pastilleRecus.setBackground(Ui.arrondi(Ui.ROUGE, Ui.dp(5)));
-                pastilleRecus.setVisibility(View.GONE);
-                cadre.addView(pastilleRecus, new FrameLayout.LayoutParams(Ui.dp(10), Ui.dp(10), Gravity.END | Gravity.TOP));
-            }
-            b.addView(cadre);
-            libelles[i] = Ui.texte(this, NOMS_ONGLETS[i], 10.5f, Ui.DOUX, true);
-            libelles[i].setMaxLines(1);
-            b.addView(libelles[i]);
-            b.setOnClickListener(v -> choisir(n));
-            barre.addView(b, Ui.poids(1));
-        }
-        col.addView(barre);
         racine.addView(col, plein());
+
+        pastilleRecus = point();
+        pastilleDem = point();
+        pastilleMsg = point();
 
         chargementVue = new ProgressBar(this, null, android.R.attr.progressBarStyleHorizontal);
         chargementVue.setIndeterminate(true);
         chargementVue.setVisibility(View.GONE);
         racine.addView(chargementVue, new FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, Ui.dp(4), Gravity.TOP));
+        construireTiroir();
         majBarre();
     }
 
     private void choisir(int n) {
+        if (n >= T_G_ENC && !estTresorier()) n = T_ACCUEIL;
+        if (n == T_MESSAGES && !bureau.possible() && bienvenue == null) { /* la page explique l'accès */ }
         onglet = n;
         if (n == T_RECUS) marquerRecusVus();
         if (n == T_DEMARCHES) { pastilleDem.setVisibility(View.GONE); signalerReponses(); synchroniserDemarches(); }
+        if (n == T_MESSAGES) { marquerMessagesVus(); synchroniserMessages(); }
+        if (n >= T_G_ENC) chargerContexte(true);
         majBarre();
         afficher();
         luminosite();
     }
 
     private void majBarre() {
-        for (int i = 0; i < NB_ONGLETS; i++) {
-            int c = i == onglet ? Ui.VERT_TEXTE : Ui.DOUX;
-            icones[i].couleur(c);
-            libelles[i].setTextColor(c);
-        }
+        if (titreBarre == null) return;
+        titreBarre.setText(onglet == T_ACCUEIL ? "Tableau de bord" : NOMS_MENU[onglet]);
+        boolean p = pastilleRecus.getVisibility() == View.VISIBLE || pastilleDem.getVisibility() == View.VISIBLE
+                || pastilleMsg.getVisibility() == View.VISIBLE;
+        pointMenu.setVisibility(p ? View.VISIBLE : View.GONE);
+        if (tiroirOuvert()) remplirTiroir();
     }
 
     /** La carte de membre s'affiche à pleine luminosité, pour que son code QR se lise bien. */
@@ -244,6 +273,7 @@ public class MainActivity extends Activity {
     }
 
     private void afficher() {
+        majBarre();
         contenu.removeAllViews();
         LinearLayout page = Ui.colonne(this);
         page.setPadding(0, 0, 0, Ui.dp(24));
@@ -252,6 +282,13 @@ public class MainActivity extends Activity {
             case T_DEMARCHES: pageDemarches(page); break;
             case T_CARTE: pageCarte(page); break;
             case T_ASSO: pageAsso(page); break;
+            case T_MESSAGES: pageMessages(page); break;
+            case T_G_ENC: pageEncaisser(page); break;
+            case T_G_DEP: pageDepenses(page); break;
+            case T_G_MEM: pageMembres(page); break;
+            case T_G_REU: pageReunions(page); break;
+            case T_G_SOL: pageSolidarite(page); break;
+            case T_G_OPS: pageOperations(page); break;
             default: pageAccueil(page); break;
         }
         ScrollView defil = new ScrollView(this);
@@ -406,6 +443,7 @@ public class MainActivity extends Activity {
             bandeauEtat(corps);
             inviterAccesComplet(corps, "Votre carte de membre est enregistrée. Pour voir vos cotisations et vos reçus, "
                     + "scannez le code QR personnel de votre dossier (envoyé par le bureau) ou connectez-vous.");
+            blocUrgence(corps, asso);
             return;
         }
 
@@ -476,6 +514,10 @@ public class MainActivity extends Activity {
         dem.setPadding(Ui.dp(4), Ui.dp(16), 0, 0);
         dem.setOnClickListener(v -> choisir(T_DEMARCHES));
         corps.addView(dem);
+
+        blocTresorier(corps);
+        blocChiffres(corps);
+        blocUrgence(corps, asso);
 
         TextView pied = Ui.texte(this, "Informations publiées par le trésorier le " + Ui.moment(M.optString("publieLe", ""))
                 + ". Vos montants changent après saisie par le trésorier.", 12, Ui.DOUX, false);
@@ -718,12 +760,34 @@ public class MainActivity extends Activity {
     // ================================================================== ASSOCIATION
     private void pageAsso(LinearLayout page) {
         JSONObject asso = M == null ? null : M.optJSONObject("asso");
-        titre(page, asso == null ? "Association" : asso.optString("nom", "Association"),
-                asso == null ? "" : "Exercice " + asso.optString("exercice", "") + (asso.optString("siege", "").isEmpty() ? "" : " · " + asso.optString("siege")));
+        titre(page, "Réglages et aide", asso == null ? "" : asso.optString("nom", "") + " · Exercice " + asso.optString("exercice", "")
+                + (asso.optString("siege", "").isEmpty() ? "" : " · " + asso.optString("siege")));
         LinearLayout corps = marge(page);
         bandeauEtat(corps);
 
-        // urgence
+        // plus
+        section(corps, "Plus");
+        LinearLayout reg = Ui.carte(this);
+        reg.setPadding(Ui.dp(6), Ui.dp(4), Ui.dp(6), Ui.dp(4));
+        reglage(reg, Icone.LIEN, "Ouvrir l'espace complet sur le site", null, v -> ouvrirSite(lienSite()));
+        reglage(reg, Icone.CADENAS, "Verrouiller l'appli par un code", donnees.aUnCode() ? "Activé" : "Désactivé", v -> reglerCode());
+        reglage(reg, Icone.ACTUALISER, "Actualiser maintenant", donnees.memoriseLe() > 0 ? "Dernière fois : " + Ui.moment(donnees.memoriseLe()) : null, v -> rafraichir(true));
+        reglage(reg, Icone.QR, "Scanner un autre code QR", null, v -> scanner());
+        reglage(reg, Icone.BOUCLIER, "Rechercher une mise à jour de l'appli", "Version " + BuildConfig.VERSION_NAME, v -> verifierMaj(true));
+        if (estTresorier() && bureau.codeOps() != null)
+            reglage(reg, Icone.BOUCLIER, "Oublier le code d'opérations", "La gestion le redemandera", v -> confirmer("Oublier le code d'opérations ?",
+                    "Le code sera redemandé avant la prochaine opération.", () -> { bureau.oublierCodeOps(); CTX = null; message("Code oublié sur ce téléphone."); afficher(); }));
+        reglage(reg, Icone.SORTIE, "Se déconnecter (changer de membre ou d'association)", null, v -> oublier());
+        corps.addView(reg);
+
+        TextView cr = Ui.texte(this, "AMEDIS Asso " + BuildConfig.VERSION_NAME + "\nConception : M. KAMAGATE, Inspecteur d'Orientation, CIO Bouaké 2.\n"
+                + "Les démarches et les opérations du trésorier sont appliquées par le logiciel AMEDIS pro Asso du PC, qui reste la référence.", 12, Ui.DOUX, false);
+        cr.setGravity(Gravity.CENTER);
+        cr.setPadding(Ui.dp(8), Ui.dp(22), Ui.dp(8), 0);
+        corps.addView(cr);
+    }
+
+    private void blocUrgence(LinearLayout corps, JSONObject asso) {
         JSONArray u = asso == null ? null : asso.optJSONArray("urgence");
         if (u != null && u.length() > 0) {
             section(corps, "En cas d'urgence");
@@ -734,8 +798,12 @@ public class MainActivity extends Activity {
             }
         }
 
+    }
+
+    private void blocChiffres(LinearLayout corps) {
+        JSONObject src = AS != null && AS.optJSONObject("tableau") != null ? AS : M;
         // l'association en chiffres
-        JSONObject tab = AS == null ? null : AS.optJSONObject("tableau");
+        JSONObject tab = src == null ? null : src.optJSONObject("tableau");
         section(corps, "L'association en chiffres");
         if (tab == null) {
             LinearLayout c = Ui.carte(this);
@@ -760,7 +828,7 @@ public class MainActivity extends Activity {
             r2.addView(tuile("Dépenses", Ui.nombre(tab.optDouble("depenses", 0)), mon, Ui.TEXTE), Ui.poids(1));
             corps.addView(r2, Ui.large(Ui.dp(10)));
 
-            JSONArray cots = AS.optJSONArray("cotisations");
+            JSONArray cots = src.optJSONArray("cotisations");
             if (cots != null && cots.length() > 0) {
                 LinearLayout c = Ui.carte(this);
                 c.addView(Ui.texte(this, "Membres à jour, par cotisation", 15, Ui.TEXTE, true));
@@ -778,23 +846,6 @@ public class MainActivity extends Activity {
             }
         }
 
-        // plus
-        section(corps, "Plus");
-        LinearLayout reg = Ui.carte(this);
-        reg.setPadding(Ui.dp(6), Ui.dp(4), Ui.dp(6), Ui.dp(4));
-        reglage(reg, Icone.LIEN, "Ouvrir l'espace complet sur le site", null, v -> ouvrirSite(lienSite()));
-        reglage(reg, Icone.CADENAS, "Verrouiller l'appli par un code", donnees.aUnCode() ? "Activé" : "Désactivé", v -> reglerCode());
-        reglage(reg, Icone.ACTUALISER, "Actualiser maintenant", donnees.memoriseLe() > 0 ? "Dernière fois : " + Ui.moment(donnees.memoriseLe()) : null, v -> rafraichir(true));
-        reglage(reg, Icone.QR, "Scanner un autre code QR", null, v -> scanner());
-        reglage(reg, Icone.BOUCLIER, "Rechercher une mise à jour de l'appli", "Version " + BuildConfig.VERSION_NAME, v -> verifierMaj(true));
-        reglage(reg, Icone.PERSONNE, "Changer de membre ou d'association", null, v -> oublier());
-        corps.addView(reg);
-
-        TextView cr = Ui.texte(this, "AMEDIS Asso " + BuildConfig.VERSION_NAME + "\nConception : M. KAMAGATE, Inspecteur d'Orientation, CIO Bouaké 2.\n"
-                + "Les démarches sont transmises au bureau : aucune cotisation ni aucun reçu ne peut être modifié depuis l'appli.", 12, Ui.DOUX, false);
-        cr.setGravity(Gravity.CENTER);
-        cr.setPadding(Ui.dp(8), Ui.dp(22), Ui.dp(8), 0);
-        corps.addView(cr);
     }
 
     private View carteContact(JSONObject x) {
@@ -1436,6 +1487,8 @@ public class MainActivity extends Activity {
                     donnees.memoriser(M, AS);
                     nouveauxRecus();
                     synchroniserDemarches();
+                    synchroniserMessages();
+                    if (estTresorier()) chargerContexte(!manuel);
                     if (manuel) message("Informations à jour.");
                 } else if (fm != null) {
                     horsLigne = false;
@@ -1642,6 +1695,10 @@ public class MainActivity extends Activity {
                     donnees.toutEffacer();
                     demarches.oublier();
                     DEM = null;
+                    bureau.oublier();
+                    MSG = null;
+                    CTX = null;
+                    arreterLecture();
                     getSharedPreferences("amedis", MODE_PRIVATE).edit().remove("recusVus").apply();
                     CookieManager.getInstance().removeAllCookies(null);
                     M = null;
@@ -1654,6 +1711,1305 @@ public class MainActivity extends Activity {
                     montrerBienvenue();
                 })
                 .setNegativeButton("Annuler", null).show();
+    }
+
+    // ================================================================== MENU LATÉRAL (sur le modèle de l'appli PAI Secondaire)
+    private void construireTiroir() {
+        if (tiroir != null) retirer(tiroir);
+        tiroir = new FrameLayout(this);
+        View voile = new View(this);
+        voile.setBackgroundColor(0x88000000);
+        voile.setOnClickListener(v -> fermerTiroir());
+        tiroir.addView(voile, plein());
+        ScrollView sc = new ScrollView(this);
+        sc.setBackgroundColor(Ui.CARTE);
+        sc.setFillViewport(true);
+        sc.setElevation(Ui.dp(12));
+        panneau = Ui.colonne(this);
+        sc.addView(panneau);
+        int largeur = Math.min(Ui.dp(320), (int) (getResources().getDisplayMetrics().widthPixels * 0.84));
+        tiroir.addView(sc, new FrameLayout.LayoutParams(largeur, ViewGroup.LayoutParams.MATCH_PARENT, Gravity.START));
+        tiroir.setVisibility(View.GONE);
+        racine.addView(tiroir, plein());
+    }
+
+    private boolean tiroirOuvert() { return tiroir != null && tiroir.getVisibility() == View.VISIBLE; }
+
+    private void ouvrirTiroir() {
+        if (bienvenue != null || verrouille) return;
+        remplirTiroir();
+        tiroir.setVisibility(View.VISIBLE);
+        View p = (View) panneau.getParent();
+        p.setTranslationX(-Ui.dp(330));
+        p.animate().translationX(0).setDuration(220).start();
+        tiroir.getChildAt(0).setAlpha(0f);
+        tiroir.getChildAt(0).animate().alpha(1f).setDuration(220).start();
+    }
+
+    private void fermerTiroir() {
+        if (!tiroirOuvert()) return;
+        View p = (View) panneau.getParent();
+        p.animate().translationX(-Ui.dp(330)).setDuration(180).withEndAction(() -> tiroir.setVisibility(View.GONE)).start();
+        tiroir.getChildAt(0).animate().alpha(0f).setDuration(180).start();
+    }
+
+    private void remplirTiroir() {
+        panneau.removeAllViews();
+        JSONObject asso = M == null ? null : M.optJSONObject("asso");
+        LinearLayout tete = Ui.ligne(this);
+        tete.setPadding(Ui.dp(20), Ui.dp(24), Ui.dp(16), Ui.dp(18));
+        ImageView logo = new ImageView(this);
+        Bitmap bl = asso == null ? null : Ui.image(asso.optString("logo", ""));
+        if (bl != null) logo.setImageBitmap(Ui.rond(bl, Ui.dp(50)));
+        else logo.setImageBitmap(Ui.initiales("A", Ui.dp(50)));
+        tete.addView(logo, new LinearLayout.LayoutParams(Ui.dp(50), Ui.dp(50)));
+        tete.addView(Ui.espace(this, Ui.dp(14)));
+        LinearLayout tt = Ui.colonne(this);
+        tt.addView(Ui.texte(this, asso == null ? "AMEDIS Asso" : asso.optString("nom", "AMEDIS Asso"), 17, Ui.TEXTE, true));
+        tt.addView(Ui.texte(this, "Espace des membres" + (asso != null && asso.has("exercice") ? " · " + asso.optString("exercice") : ""), 13, Ui.DOUX, false));
+        tete.addView(tt, Ui.poids(1));
+        panneau.addView(tete);
+        trait(panneau);
+
+        rubrique("Pilotage");
+        entree(T_ACCUEIL, null);
+        entree(T_MESSAGES, pastilleMsg);
+        rubrique("Mon espace");
+        entree(T_RECUS, pastilleRecus);
+        entree(T_DEMARCHES, pastilleDem);
+        entree(T_CARTE, null);
+        if (estTresorier()) {
+            rubrique("Gestion");
+            entree(T_G_ENC, null);
+            entree(T_G_DEP, null);
+            entree(T_G_MEM, null);
+            entree(T_G_REU, null);
+            entree(T_G_SOL, null);
+            entree(T_G_OPS, null);
+        }
+        rubrique("Plus");
+        entree(T_ASSO, null);
+
+        View ressort = new View(this);
+        panneau.addView(ressort, new LinearLayout.LayoutParams(1, 0, 1f));
+        trait(panneau);
+        JSONObject moi = M == null ? null : M.optJSONObject("moi");
+        LinearLayout pied = Ui.ligne(this);
+        pied.setPadding(Ui.dp(20), Ui.dp(16), Ui.dp(16), Ui.dp(6));
+        ImageView av = new ImageView(this);
+        String ini = moi == null ? "?" : Ui.initialesDe(moi.optString("prenoms"), moi.optString("nom"));
+        Bitmap ph = moi == null ? null : Ui.image(moi.optString("photo", ""));
+        av.setImageBitmap(ph != null ? Ui.rond(ph, Ui.dp(46)) : carreInitiales(ini, Ui.dp(46)));
+        pied.addView(av, new LinearLayout.LayoutParams(Ui.dp(46), Ui.dp(46)));
+        pied.addView(Ui.espace(this, Ui.dp(14)));
+        LinearLayout pt = Ui.colonne(this);
+        pt.addView(Ui.texte(this, moi == null ? "Membre" : (moi.optString("nom") + " " + moi.optString("prenoms")).trim().toUpperCase(Locale.FRANCE), 15, Ui.TEXTE, true));
+        String sous = moi == null ? "" : "N° " + moi.optString("i") + (fonction().isEmpty() ? "" : " · " + fonction());
+        pt.addView(Ui.texte(this, sous, 12.5f, Ui.DOUX, false));
+        pied.addView(pt, Ui.poids(1));
+        panneau.addView(pied);
+        TextView dec = Ui.texte(this, "Se déconnecter", 14.5f, Ui.TEXTE, false);
+        dec.setPadding(Ui.dp(22), Ui.dp(14), Ui.dp(16), Ui.dp(22));
+        dec.setOnClickListener(v -> { fermerTiroir(); oublier(); });
+        panneau.addView(dec);
+    }
+
+    private Bitmap carreInitiales(String t, int taille) {
+        Bitmap b = Bitmap.createBitmap(taille, taille, Bitmap.Config.ARGB_8888);
+        android.graphics.Canvas cv = new android.graphics.Canvas(b);
+        Paint p = new Paint(Paint.ANTI_ALIAS_FLAG);
+        p.setColor(Ui.VERT);
+        cv.drawRoundRect(new android.graphics.RectF(0, 0, taille, taille), taille * 0.24f, taille * 0.24f, p);
+        p.setColor(Color.WHITE);
+        p.setTextAlign(Paint.Align.CENTER);
+        p.setTextSize(taille * 0.38f);
+        p.setTypeface(android.graphics.Typeface.DEFAULT_BOLD);
+        cv.drawText(t, taille / 2f, taille / 2f - (p.descent() + p.ascent()) / 2, p);
+        return b;
+    }
+
+    private void trait(LinearLayout parent) {
+        View t = new View(this);
+        t.setBackgroundColor(Ui.LIGNE);
+        parent.addView(t, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 1));
+    }
+
+    private void rubrique(String t) {
+        TextView v = Ui.etiquette(this, t);
+        v.setPadding(Ui.dp(26), Ui.dp(18), 0, Ui.dp(6));
+        panneau.addView(v);
+    }
+
+    private void entree(final int t, View pastille) {
+        LinearLayout l = Ui.ligne(this);
+        l.setPadding(Ui.dp(14), Ui.dp(12), Ui.dp(14), Ui.dp(12));
+        boolean actif = t == onglet;
+        if (actif) l.setBackground(Ui.arrondi(Ui.VERT_PALE, Ui.dp(14)));
+        l.addView(new Icone(this, ICONES_PAGES[t], actif ? Ui.VERT_TEXTE : Ui.DOUX), new LinearLayout.LayoutParams(Ui.dp(24), Ui.dp(24)));
+        l.addView(Ui.espace(this, Ui.dp(16)));
+        l.addView(Ui.texte(this, NOMS_MENU[t], 15.5f, actif ? Ui.VERT_TEXTE : Ui.TEXTE, actif), Ui.poids(1));
+        if (pastille != null) {
+            retirer(pastille);
+            l.addView(pastille, new LinearLayout.LayoutParams(Ui.dp(10), Ui.dp(10)));
+        }
+        l.setOnClickListener(v -> { fermerTiroir(); choisir(t); });
+        LinearLayout.LayoutParams lp = Ui.large(Ui.dp(2));
+        lp.leftMargin = Ui.dp(10);
+        lp.rightMargin = Ui.dp(10);
+        panneau.addView(l, lp);
+    }
+
+    private View point() {
+        View p = new View(this);
+        p.setBackground(Ui.arrondi(Ui.ROUGE, Ui.dp(5)));
+        p.setVisibility(View.GONE);
+        return p;
+    }
+
+    // ================================================================== rôles (le site les contrôle aussi)
+    private JSONObject role() {
+        JSONObject r = M == null ? null : M.optJSONObject("role");
+        return r == null ? new JSONObject() : r;
+    }
+
+    private String fonction() {
+        JSONObject moi = M == null ? null : M.optJSONObject("moi");
+        return moi == null ? "" : moi.optString("fonction", "").trim();
+    }
+
+    private boolean estBureau() {
+        return role().optBoolean("bureau", fonction().toLowerCase(Locale.FRANCE).matches(".*(tr[ée]sori|pr[ée]sident|secr[ée]taire).*"));
+    }
+
+    private boolean estTresorier() {
+        return role().optBoolean("tresorier", fonction().toLowerCase(Locale.FRANCE).matches(".*tr[ée]sori.*"));
+    }
+
+    private boolean fonctionBureau(String f) {
+        return String.valueOf(f).toLowerCase(Locale.FRANCE).matches(".*(tr[ée]sori|pr[ée]sident|secr[ée]taire).*");
+    }
+
+    // ================================================================== MESSAGERIE
+    private MediaRecorder enregistreur;
+    private MediaPlayer lecteur;
+    private String lectureId;
+    private TextView lectureVue, etiquetteEnAttente;
+    private File fichierVocal;
+    private long debutEnreg;
+    private int dureeVocal;
+
+    private void pageMessages(LinearLayout page) {
+        boolean bur = estBureau();
+        titre(page, "Messagerie", bur ? "Écrivez ou parlez à un membre, à plusieurs ou à toute l'association"
+                : "Les messages du Président, du Secrétaire général et du Trésorier");
+        LinearLayout corps = marge(page);
+        bandeauEtat(corps);
+        if (!bureau.possible()) {
+            inviterAccesComplet(corps, "La messagerie s'ouvre avec votre dossier personnel ou votre identifiant de membre.");
+            return;
+        }
+        if (bur) {
+            LinearLayout b = Ui.ligne(this);
+            b.addView(boutonIcone(Icone.ENVELOPPE, "Message écrit", true, v -> composer(null, false)), Ui.poids(1));
+            b.addView(Ui.espace(this, Ui.dp(10)));
+            b.addView(boutonIcone(Icone.MICRO, "Message vocal", false, v -> composer(null, true)), Ui.poids(1));
+            corps.addView(b, Ui.large(Ui.dp(12)));
+        }
+        int n = bureau.fileMsg().length();
+        if (n > 0) corps.addView(info(Icone.NUAGE, n + (n > 1 ? " messages gardés" : " message gardé") + " sur le téléphone : envoi automatique au retour d'Internet."), Ui.large(Ui.dp(12)));
+        JSONArray l = MSG == null ? null : MSG.optJSONArray("messages");
+        if (l == null || l.length() == 0) {
+            LinearLayout v = Ui.colonne(this);
+            v.setGravity(Gravity.CENTER_HORIZONTAL);
+            v.setPadding(Ui.dp(20), Ui.dp(44), Ui.dp(20), Ui.dp(20));
+            v.addView(rondIcone(Icone.ENVELOPPE, Ui.VERT_PALE, Ui.VERT_TEXTE, Ui.dp(72)));
+            TextView t = Ui.texte(this, MSG == null ? "Chargement des messages…" : "Aucun message pour l'instant", 17, Ui.TEXTE, true);
+            t.setPadding(0, Ui.dp(14), 0, Ui.dp(4));
+            v.addView(t);
+            TextView s = Ui.texte(this, bur ? "Vos messages et les réponses des membres apparaîtront ici."
+                    : "Quand le bureau vous écrit, le message apparaît ici. Vous pourrez lui répondre par écrit ou par un message vocal.", 14, Ui.DOUX, false);
+            s.setGravity(Gravity.CENTER);
+            v.addView(s);
+            corps.addView(v);
+            return;
+        }
+        section(corps, "Messages (" + l.length() + ")");
+        for (int i = 0; i < l.length(); i++) {
+            JSONObject x = l.optJSONObject(i);
+            if (x != null) corps.addView(carteMessage(x, bur), Ui.large(i == 0 ? 0 : Ui.dp(10)));
+        }
+    }
+
+    private View carteMessage(final JSONObject x, boolean bur) {
+        boolean moi = x.optBoolean("moi"), vocal = "vocal".equals(x.optString("type"));
+        LinearLayout c = Ui.carte(this);
+        LinearLayout l = Ui.ligne(this);
+        l.addView(rondIcone(moi ? Icone.ENVOYER : vocal ? Icone.MICRO : Icone.ENVELOPPE, moi ? Ui.PISTE : Ui.VERT_PALE, Ui.VERT_TEXTE, Ui.dp(40)));
+        l.addView(Ui.espace(this, Ui.dp(12)));
+        LinearLayout t = Ui.colonne(this);
+        String qui = moi ? "Vous → " + x.optString("pourNoms")
+                : x.optString("deNom") + (x.optString("deFonction").isEmpty() ? "" : " · " + x.optString("deFonction"));
+        t.addView(Ui.texte(this, qui, 15, Ui.TEXTE, true));
+        t.addView(Ui.texte(this, Ui.moment(x.optString("le")) + (!moi && x.optBoolean("pourTous") ? " · à toute l'association" : ""), 12.5f, Ui.DOUX, false));
+        l.addView(t, Ui.poids(1));
+        c.addView(l);
+        if (!x.optString("texte").isEmpty()) {
+            TextView tx = Ui.texte(this, x.optString("texte"), 14.5f, Ui.TEXTE, false);
+            tx.setTextIsSelectable(true);
+            c.addView(tx, Ui.large(Ui.dp(10)));
+        }
+        if (x.optBoolean("audio")) c.addView(lecteurVocal(x.optString("id"), x.optInt("duree")), Ui.large(Ui.dp(10)));
+        if (!moi && (bur || fonctionBureau(x.optString("deFonction")))) {
+            LinearLayout b = Ui.ligne(this);
+            b.addView(boutonIcone(Icone.ENVELOPPE, "Répondre", false, v -> composer(x, false)), Ui.poids(1));
+            b.addView(Ui.espace(this, Ui.dp(10)));
+            b.addView(boutonIcone(Icone.MICRO, "Réponse vocale", false, v -> composer(x, true)), Ui.poids(1));
+            c.addView(b, Ui.large(Ui.dp(12)));
+        }
+        return c;
+    }
+
+    private View lecteurVocal(final String id, int duree) {
+        LinearLayout l = Ui.ligne(this);
+        l.setPadding(Ui.dp(10), Ui.dp(8), Ui.dp(14), Ui.dp(8));
+        l.setBackground(Ui.arrondi(Ui.PISTE, Ui.dp(24)));
+        l.addView(rondIcone(Icone.LECTURE, Ui.VERT, Color.WHITE, Ui.dp(36)));
+        l.addView(Ui.espace(this, Ui.dp(12)));
+        final TextView t = Ui.texte(this, "Message vocal · " + duree(duree), 14, Ui.TEXTE, true);
+        l.addView(t, Ui.poids(1));
+        l.setOnClickListener(v -> jouer(id, t, duree));
+        return l;
+    }
+
+    private static String duree(long s) {
+        return (s / 60) + ":" + String.format(Locale.US, "%02d", s % 60);
+    }
+
+    private void arreterLecture() {
+        if (lecteur != null) {
+            try { lecteur.stop(); } catch (Exception ignore) { /* déjà arrêté */ }
+            lecteur.release();
+            lecteur = null;
+        }
+        if (lectureVue != null) lectureVue.setText(lectureVue.getText().toString().replace("■ Lecture en cours", "Message vocal"));
+        lectureId = null;
+        lectureVue = null;
+    }
+
+    private void jouer(final String id, final TextView vue, final int duree) {
+        if (id.equals(lectureId)) { arreterLecture(); return; }
+        arreterLecture();
+        final File f = new File(getCacheDir(), "vocal_" + id.replaceAll("[^\\w]", "") + ".m4a");
+        vue.setText("Chargement… · " + duree(duree));
+        fond.execute(() -> {
+            String err = null;
+            try {
+                if (!f.exists() || f.length() == 0) {
+                    byte[] b = Base64.decode(bureau.audio(id), Base64.DEFAULT);
+                    try (FileOutputStream o = new FileOutputStream(f)) { o.write(b); }
+                }
+            } catch (Bureau.Refus e) {
+                err = e.getMessage();
+            } catch (Exception e) {
+                err = "Pas de connexion Internet : le message vocal se télécharge à la première écoute.";
+            }
+            final String fe = err;
+            ui.post(() -> {
+                if (fe != null) { vue.setText("Message vocal · " + duree(duree)); message(fe); return; }
+                try {
+                    lecteur = new MediaPlayer();
+                    lecteur.setDataSource(f.getAbsolutePath());
+                    lecteur.setOnCompletionListener(mp -> arreterLecture());
+                    lecteur.prepare();
+                    lecteur.start();
+                    lectureId = id;
+                    lectureVue = vue;
+                    vue.setText("■ Lecture en cours · " + duree(duree));
+                } catch (Exception e) {
+                    arreterLecture();
+                    message("Lecture impossible sur ce téléphone.");
+                }
+            });
+        });
+    }
+
+    private String nomExpediteur(JSONObject x) {
+        return x.optString("deNom") + (x.optString("deFonction").isEmpty() ? "" : " (" + x.optString("deFonction") + ")");
+    }
+
+    /** Nouveau message (bureau) ou réponse ; écrit et/ou vocal. */
+    private void composer(final JSONObject rep, boolean vocalDAbord) {
+        final boolean bur = estBureau();
+        if (rep == null && !bur) { message("Seuls le Président, le Secrétaire général et le Trésorier écrivent à l'association."); return; }
+        final java.util.ArrayList<String> choisis = new java.util.ArrayList<>();
+        final boolean[] tous = {true};
+        LinearLayout f = Ui.colonne(this);
+        final TextView dest = Ui.texte(this, "", 14.5f, Ui.VERT_TEXTE, true);
+        dest.setPadding(0, Ui.dp(4), 0, Ui.dp(8));
+        final Runnable majDest = () -> dest.setText(rep != null ? "À : " + nomExpediteur(rep)
+                : tous[0] ? "À : toute l'association  ▾" : "À : " + choisis.size() + " membre(s) choisi(s)  ▾");
+        majDest.run();
+        if (rep == null) dest.setOnClickListener(v -> choisirDestinataires(choisis, tous, majDest));
+        f.addView(dest);
+        final EditText t = new EditText(this);
+        t.setHint(rep == null ? "Votre message (facultatif avec un message vocal)" : "Votre réponse");
+        t.setMinLines(3);
+        t.setGravity(Gravity.TOP);
+        t.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_FLAG_MULTI_LINE | InputType.TYPE_TEXT_FLAG_CAP_SENTENCES);
+        f.addView(t);
+        final TextView vocal = Ui.texte(this, "🎤  Enregistrer un message vocal (2 min 30 au plus)", 14.5f, Ui.VERT_TEXTE, true);
+        vocal.setPadding(Ui.dp(12), Ui.dp(12), Ui.dp(12), Ui.dp(12));
+        vocal.setBackground(Ui.bordure(Color.TRANSPARENT, Ui.VERT_TEXTE, Ui.dp(10)));
+        f.addView(vocal, Ui.large(Ui.dp(10)));
+        fichierVocal = null;
+        dureeVocal = 0;
+        vocal.setOnClickListener(v -> basculerEnregistrement(vocal));
+        final AlertDialog d = new AlertDialog.Builder(this)
+                .setTitle(rep == null ? "Nouveau message" : "Répondre")
+                .setView(encadrer(f))
+                .setPositiveButton("Envoyer", null)
+                .setNegativeButton("Annuler", (x, w) -> arreterEnregistrement(null))
+                .create();
+        d.setOnShowListener(x -> d.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener(w -> {
+            if (enregistreur != null) arreterEnregistrement(vocal);
+            String texte = t.getText().toString().trim();
+            if (texte.isEmpty() && fichierVocal == null) { message("Écrivez un message ou enregistrez un message vocal."); return; }
+            if (rep == null && !tous[0] && choisis.isEmpty()) { message("Choisissez au moins un destinataire."); return; }
+            try {
+                JSONObject m = new JSONObject();
+                m.put("texte", texte);
+                m.put("idAppli", Bureau.nouvelId());
+                if (rep != null) {
+                    m.put("reponseA", rep.optString("id"));
+                    m.put("pour", new JSONArray());
+                } else {
+                    m.put("pour", tous[0] ? "TOUS" : new JSONArray(choisis));
+                }
+                if (fichierVocal != null && fichierVocal.exists()) {
+                    m.put("audio", Base64.encodeToString(lireFichier(fichierVocal), Base64.NO_WRAP));
+                    m.put("duree", dureeVocal);
+                }
+                d.dismiss();
+                envoyerMessage(m);
+            } catch (Exception e) {
+                message("Message vocal illisible : recommencez l'enregistrement.");
+            }
+        }));
+        d.show();
+        if (vocalDAbord) basculerEnregistrement(vocal);
+    }
+
+    private static byte[] lireFichier(File f) throws java.io.IOException {
+        java.io.ByteArrayOutputStream o = new java.io.ByteArrayOutputStream();
+        try (java.io.FileInputStream in = new java.io.FileInputStream(f)) {
+            byte[] b = new byte[16384];
+            int n;
+            while ((n = in.read(b)) > 0) o.write(b, 0, n);
+        }
+        return o.toByteArray();
+    }
+
+    private void choisirDestinataires(final java.util.ArrayList<String> choisis, final boolean[] tous, final Runnable majDest) {
+        JSONArray a = MSG == null ? null : MSG.optJSONArray("annuaire");
+        if (a == null || a.length() == 0) {
+            message("Liste des membres indisponible : actualisez la messagerie avec Internet.");
+            return;
+        }
+        new AlertDialog.Builder(this).setTitle("Destinataires")
+                .setItems(new String[]{"Toute l'association", "Choisir des membres…"}, (dlg, w) -> {
+                    if (w == 0) { tous[0] = true; choisis.clear(); majDest.run(); return; }
+                    final String[] noms = new String[a.length()], ids = new String[a.length()];
+                    final boolean[] coches = new boolean[a.length()];
+                    for (int i = 0; i < a.length(); i++) {
+                        JSONObject m = a.optJSONObject(i);
+                        ids[i] = m.optString("i");
+                        noms[i] = m.optString("nom") + "  (" + m.optString("i") + ")" + (m.optString("fonction").isEmpty() ? "" : " · " + m.optString("fonction"));
+                        coches[i] = choisis.contains(ids[i]);
+                    }
+                    new AlertDialog.Builder(this).setTitle("Choisir les membres")
+                            .setMultiChoiceItems(noms, coches, (d2, i, c) -> coches[i] = c)
+                            .setPositiveButton("Valider", (d2, w2) -> {
+                                choisis.clear();
+                                for (int i = 0; i < ids.length; i++) if (coches[i]) choisis.add(ids[i]);
+                                tous[0] = choisis.isEmpty();
+                                majDest.run();
+                            })
+                            .setNegativeButton("Annuler", null).show();
+                }).show();
+    }
+
+    private void basculerEnregistrement(final TextView etiquette) {
+        if (enregistreur != null) { arreterEnregistrement(etiquette); return; }
+        if (Build.VERSION.SDK_INT >= 23 && checkSelfPermission(Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
+            etiquetteEnAttente = etiquette;
+            requestPermissions(new String[]{Manifest.permission.RECORD_AUDIO}, 41);
+            return;
+        }
+        arreterLecture();
+        try {
+            fichierVocal = new File(getCacheDir(), "vocal_envoi.m4a");
+            if (fichierVocal.exists()) fichierVocal.delete();
+            enregistreur = new MediaRecorder();
+            enregistreur.setAudioSource(MediaRecorder.AudioSource.MIC);
+            enregistreur.setOutputFormat(MediaRecorder.OutputFormat.MPEG_4);
+            enregistreur.setAudioEncoder(MediaRecorder.AudioEncoder.AAC);
+            enregistreur.setAudioEncodingBitRate(32000);
+            enregistreur.setAudioSamplingRate(22050);
+            enregistreur.setMaxDuration(150000);
+            enregistreur.setOutputFile(fichierVocal.getAbsolutePath());
+            enregistreur.setOnInfoListener((mr, quoi, extra) -> {
+                if (quoi == MediaRecorder.MEDIA_RECORDER_INFO_MAX_DURATION_REACHED) arreterEnregistrement(etiquette);
+            });
+            enregistreur.prepare();
+            enregistreur.start();
+            debutEnreg = System.currentTimeMillis();
+            etiquette.setTextColor(Ui.ROUGE);
+            etiquette.setBackground(Ui.bordure(Ui.ROUGE_PALE, Ui.ROUGE, Ui.dp(10)));
+            ui.post(new Runnable() {
+                @Override
+                public void run() {
+                    if (enregistreur == null) return;
+                    etiquette.setText("■  Arrêter l'enregistrement  " + duree((System.currentTimeMillis() - debutEnreg) / 1000));
+                    ui.postDelayed(this, 500);
+                }
+            });
+        } catch (Exception e) {
+            if (enregistreur != null) enregistreur.release();
+            enregistreur = null;
+            fichierVocal = null;
+            message("Enregistrement impossible sur ce téléphone.");
+        }
+    }
+
+    private void arreterEnregistrement(TextView etiquette) {
+        if (enregistreur == null) return;
+        try { enregistreur.stop(); } catch (Exception e) { fichierVocal = null; }
+        enregistreur.release();
+        enregistreur = null;
+        dureeVocal = (int) ((System.currentTimeMillis() - debutEnreg) / 1000);
+        if (dureeVocal < 1) fichierVocal = null;
+        if (etiquette != null) {
+            etiquette.setTextColor(Ui.VERT_TEXTE);
+            etiquette.setBackground(Ui.bordure(fichierVocal != null ? Ui.VERT_PALE : Color.TRANSPARENT, Ui.VERT_TEXTE, Ui.dp(10)));
+            etiquette.setText(fichierVocal != null ? "✓  Message vocal prêt (" + duree(dureeVocal) + ") · toucher pour recommencer"
+                    : "🎤  Enregistrer un message vocal (2 min 30 au plus)");
+        }
+    }
+
+    @Override
+    public void onRequestPermissionsResult(int code, String[] permissions, int[] resultats) {
+        super.onRequestPermissionsResult(code, permissions, resultats);
+        if (code != 41) return;
+        if (resultats.length > 0 && resultats[0] == PackageManager.PERMISSION_GRANTED && etiquetteEnAttente != null) basculerEnregistrement(etiquetteEnAttente);
+        else message("Autorisez le micro pour envoyer un message vocal.");
+        etiquetteEnAttente = null;
+    }
+
+    private void envoyerMessage(final JSONObject m) {
+        enChargement(true);
+        fond.execute(() -> {
+            String msg;
+            try {
+                boolean ok = bureau.envoyerMessage(m);
+                msg = ok ? "Message envoyé." : "Pas d'Internet : le message est gardé et partira tout seul.";
+                try { MSG = bureau.boite(); } catch (Exception ignore) { /* affichage gardé */ }
+            } catch (Bureau.Refus e) {
+                msg = e.getMessage();
+            } catch (Donnees.SiteAncien e) {
+                msg = "Le site de l'association doit être mis à jour (version 1.9.0) pour la messagerie.";
+            } catch (Exception e) {
+                msg = "Pas d'Internet : un message vocal ne peut partir qu'avec une connexion. Réessayez plus tard.";
+            }
+            final String fm = msg;
+            ui.post(() -> { enChargement(false); message(fm); afficher(); });
+        });
+    }
+
+    /** Messagerie et opérations en arrière-plan : files hors connexion d'abord, puis boîte de réception. */
+    private void synchroniserMessages() {
+        if (!bureau.possible()) return;
+        fond.execute(() -> {
+            StringBuilder refus = new StringBuilder();
+            int n = 0;
+            JSONObject r = null;
+            try {
+                n = bureau.viderFiles(refus);
+                r = bureau.boite();
+            } catch (Exception ignore) { /* hors connexion ou site ancien */ }
+            final JSONObject fr = r;
+            final int fn = n;
+            ui.post(() -> {
+                if (fr != null) { MSG = fr; signalerMessages(); }
+                if (fn > 0) message(fn + (fn > 1 ? " envois en attente sont partis." : " envoi en attente est parti."));
+                if (refus.length() > 0) new AlertDialog.Builder(this).setTitle("Envoi refusé par le site")
+                        .setMessage(refus.toString()).setPositiveButton("Compris", null).show();
+                if (onglet == T_MESSAGES) { marquerMessagesVus(); afficher(); }
+                else majBarre();
+            });
+        });
+    }
+
+    private String dernierRecu() {
+        JSONArray l = MSG == null ? null : MSG.optJSONArray("messages");
+        String max = "";
+        for (int i = 0; l != null && i < l.length(); i++) {
+            JSONObject x = l.optJSONObject(i);
+            if (x != null && !x.optBoolean("moi") && x.optString("le").compareTo(max) > 0) max = x.optString("le");
+        }
+        return max;
+    }
+
+    private void signalerMessages() {
+        String d = dernierRecu(), vus = getSharedPreferences("amedis", MODE_PRIVATE).getString("msgVus", null);
+        if (vus == null) { getSharedPreferences("amedis", MODE_PRIVATE).edit().putString("msgVus", d).apply(); return; }
+        if (d.compareTo(vus) > 0 && onglet != T_MESSAGES) {
+            pastilleMsg.setVisibility(View.VISIBLE);
+            message("Nouveau message du bureau dans la Messagerie.");
+        }
+    }
+
+    private void marquerMessagesVus() {
+        pastilleMsg.setVisibility(View.GONE);
+        getSharedPreferences("amedis", MODE_PRIVATE).edit().putString("msgVus", dernierRecu()).apply();
+    }
+
+    // ================================================================== GESTION (trésorier) : opérations appliquées par le logiciel du PC
+    private boolean ctxEnCours;
+    private JSONObject encMembre, reuSaisie;
+    private final java.util.LinkedHashMap<String, String> presences = new java.util.LinkedHashMap<>();
+    private boolean modeDepense = true;
+
+    private boolean gestionPrete(LinearLayout corps) {
+        if (!estTresorier()) {
+            corps.addView(info(Icone.CADENAS, "Réservé au trésorier de l'association."), Ui.large(Ui.dp(10)));
+            return false;
+        }
+        if (bureau.codeOps() == null) {
+            LinearLayout c = Ui.carte(this);
+            LinearLayout l = Ui.ligne(this);
+            l.addView(rondIcone(Icone.BOUCLIER, Ui.VERT_PALE, Ui.VERT_TEXTE, Ui.dp(44)));
+            l.addView(Ui.espace(this, Ui.dp(12)));
+            LinearLayout t = Ui.colonne(this);
+            t.addView(Ui.texte(this, "Code d'opérations", 16, Ui.TEXTE, true));
+            t.addView(Ui.texte(this, "Saisissez le code à 6 chiffres choisi dans AMEDIS pro Asso (Paramètres › Sécurité › Appli du trésorier). Il n'est demandé qu'une fois sur ce téléphone.", 13.5f, Ui.DOUX, false));
+            l.addView(t, Ui.poids(1));
+            c.addView(l);
+            final EditText code = new EditText(this);
+            code.setHint("Code à 6 chiffres");
+            code.setInputType(InputType.TYPE_CLASS_NUMBER | InputType.TYPE_NUMBER_VARIATION_PASSWORD);
+            code.setGravity(Gravity.CENTER);
+            code.setTextSize(22);
+            code.setLetterSpacing(0.3f);
+            c.addView(code, Ui.large(Ui.dp(10)));
+            c.addView(bouton("Valider", true, v -> testerCodeOps(code.getText().toString().trim())), Ui.large(Ui.dp(10)));
+            corps.addView(c, Ui.large(Ui.dp(10)));
+            return false;
+        }
+        if (CTX == null) {
+            corps.addView(info(Icone.ACTUALISER, ctxEnCours ? "Chargement des listes (membres, cotisations, caisses)…" : "Listes indisponibles : vérifiez la connexion Internet puis tirez l'écran vers le bas."), Ui.large(Ui.dp(10)));
+            if (!ctxEnCours) chargerContexte(true);
+            return false;
+        }
+        return true;
+    }
+
+    private void testerCodeOps(final String code) {
+        if (!code.matches("\\d{6}")) { message("Le code compte 6 chiffres."); return; }
+        bureau.definirCodeOps(code);
+        enChargement(true);
+        fond.execute(() -> {
+            String msg = null;
+            try {
+                CTX = bureau.contexte();
+            } catch (Bureau.Refus e) {
+                if (e.codeRefuse || e.getMessage().contains("pas activées")) bureau.oublierCodeOps();
+                msg = e.getMessage();
+            } catch (Donnees.SiteAncien e) {
+                bureau.oublierCodeOps();
+                msg = "Le site de l'association doit être mis à jour (version 1.9.0) pour les opérations du trésorier.";
+            } catch (Exception e) {
+                bureau.oublierCodeOps();
+                msg = "Pas de connexion Internet : le code sera vérifié à la prochaine connexion.";
+            }
+            final String fm = msg;
+            ui.post(() -> { enChargement(false); message(fm == null ? "Code accepté : la gestion est ouverte." : fm); afficher(); });
+        });
+    }
+
+    private void chargerContexte(final boolean silencieux) {
+        if (!estTresorier() || bureau.codeOps() == null || ctxEnCours) return;
+        ctxEnCours = true;
+        fond.execute(() -> {
+            String msg = null;
+            try {
+                bureau.viderFiles(null);
+                CTX = bureau.contexte();
+            } catch (Bureau.Refus e) {
+                if (e.codeRefuse) { bureau.oublierCodeOps(); CTX = null; }
+                msg = e.getMessage();
+            } catch (Donnees.SiteAncien e) {
+                msg = "Le site de l'association doit être mis à jour (version 1.9.0) pour les opérations du trésorier.";
+            } catch (Exception e) {
+                if (CTX == null) CTX = bureau.contexteMemorise();
+                if (!silencieux) msg = "Pas de connexion Internet : listes enregistrées affichées.";
+            }
+            final String fm = msg;
+            ui.post(() -> {
+                ctxEnCours = false;
+                if (fm != null) message(fm);
+                if (onglet >= T_G_ENC) afficher();
+            });
+        });
+    }
+
+    private void envoyerOp(final String type, final String resume, final JSONObject donnees, final Runnable apres) {
+        if (CTX == null) return;
+        try {
+            final JSONObject o = new JSONObject();
+            o.put("type", type);
+            o.put("exercice", CTX.optString("exercice"));
+            o.put("resume", resume);
+            o.put("donnees", donnees);
+            o.put("idAppli", Bureau.nouvelId());
+            enChargement(true);
+            fond.execute(() -> {
+                String msg;
+                boolean reussi = false;
+                try {
+                    boolean ok = bureau.envoyerOperation(o);
+                    reussi = true;
+                    msg = ok ? "Opération envoyée : le logiciel du PC l'appliquera dès qu'il sera ouvert, puis publiera le résultat."
+                            : "Pas d'Internet : l'opération est gardée sur le téléphone et partira toute seule.";
+                    try { CTX = bureau.contexte(); } catch (Exception ignore) { /* liste gardée */ }
+                } catch (Bureau.Refus e) {
+                    if (e.codeRefuse) { bureau.oublierCodeOps(); CTX = null; }
+                    msg = e.getMessage();
+                } catch (Donnees.SiteAncien e) {
+                    msg = "Le site de l'association doit être mis à jour (version 1.9.0).";
+                } catch (Exception e) {
+                    msg = "Envoi impossible : réessayez plus tard.";
+                }
+                final String fm = msg;
+                final boolean fr = reussi;
+                ui.post(() -> {
+                    enChargement(false);
+                    if (fr && apres != null) apres.run();
+                    new AlertDialog.Builder(this).setTitle(fr ? "C'est noté" : "Opération non envoyée").setMessage(fm)
+                            .setPositiveButton("Compris", null).show();
+                    afficher();
+                });
+            });
+        } catch (Exception e) {
+            message("Opération illisible.");
+        }
+    }
+
+    // ---- petites briques de formulaire
+    private View info(int icone, String texte) {
+        LinearLayout b = Ui.ligne(this);
+        b.setPadding(Ui.dp(14), Ui.dp(12), Ui.dp(14), Ui.dp(12));
+        b.setBackground(Ui.arrondi(Ui.OR_PALE, Ui.dp(12)));
+        b.addView(new Icone(this, icone, Ui.ORANGE), new LinearLayout.LayoutParams(Ui.dp(22), Ui.dp(22)));
+        b.addView(Ui.espace(this, Ui.dp(10)));
+        b.addView(Ui.texte(this, texte, 13.5f, Ui.TEXTE, false), Ui.poids(1));
+        return b;
+    }
+
+    private View boutonIcone(int icone, String t, boolean principal, View.OnClickListener action) {
+        LinearLayout b = Ui.ligne(this);
+        b.setGravity(Gravity.CENTER);
+        b.setPadding(Ui.dp(12), Ui.dp(12), Ui.dp(12), Ui.dp(12));
+        b.setBackground(principal ? Ui.arrondi(Ui.OR, Ui.dp(12)) : Ui.bordure(Color.TRANSPARENT, Ui.VERT_TEXTE, Ui.dp(12)));
+        b.addView(new Icone(this, icone, principal ? Ui.VERT_FONCE : Ui.VERT_TEXTE), new LinearLayout.LayoutParams(Ui.dp(20), Ui.dp(20)));
+        b.addView(Ui.espace(this, Ui.dp(8)));
+        b.addView(Ui.texte(this, t, 14.5f, principal ? Ui.VERT_FONCE : Ui.VERT_TEXTE, true));
+        b.setOnClickListener(action);
+        return b;
+    }
+
+    private void libelle(LinearLayout c, String t) {
+        TextView v = Ui.etiquette(this, t);
+        v.setPadding(0, Ui.dp(12), 0, Ui.dp(2));
+        c.addView(v);
+    }
+
+    private EditText champ(String indice, int type, String valeur) {
+        EditText e = new EditText(this);
+        e.setHint(indice);
+        e.setInputType(type);
+        if (valeur != null) e.setText(valeur);
+        return e;
+    }
+
+    private static String aujourdhui() {
+        return new java.text.SimpleDateFormat("yyyy-MM-dd", Locale.US).format(new java.util.Date());
+    }
+
+    private TextView champDate(String iso) {
+        final TextView t = Ui.texte(this, Ui.date(iso), 15.5f, Ui.TEXTE, false);
+        t.setTag(iso);
+        t.setPadding(Ui.dp(12), Ui.dp(12), Ui.dp(12), Ui.dp(12));
+        t.setBackground(Ui.bordure(Color.TRANSPARENT, Ui.LIGNE, Ui.dp(10)));
+        t.setOnClickListener(v -> {
+            String s = String.valueOf(t.getTag());
+            int y = entier(s.substring(0, 4)), m = entier(s.substring(5, 7)), d = entier(s.substring(8, 10));
+            new DatePickerDialog(this, (dp, yy, mm, dd) -> {
+                String n = String.format(Locale.US, "%04d-%02d-%02d", yy, mm + 1, dd);
+                t.setTag(n);
+                t.setText(Ui.date(n));
+            }, y, m - 1, d).show();
+        });
+        return t;
+    }
+
+    private String[] chaines(JSONArray a, String defaut) {
+        if (a == null || a.length() == 0) return new String[]{defaut};
+        String[] r = new String[a.length()];
+        for (int i = 0; i < a.length(); i++) r[i] = a.optString(i);
+        return r;
+    }
+
+    private String[] caissesCtx() {
+        JSONArray a = CTX == null ? null : CTX.optJSONArray("caisses");
+        return a == null || a.length() == 0 ? new String[]{"Espèces", "Wave", "Orange Money", "MTN MoMo", "Moov Money", "Banque"} : chaines(a, "Espèces");
+    }
+
+    private JSONObject membreCtx(String ident) {
+        JSONArray a = CTX == null ? null : CTX.optJSONArray("membres");
+        for (int i = 0; a != null && i < a.length(); i++) if (ident.equals(a.optJSONObject(i).optString("i"))) return a.optJSONObject(i);
+        return null;
+    }
+
+    private static String nomDe(JSONObject m) {
+        return (m.optString("nom") + " " + m.optString("prenoms")).trim();
+    }
+
+    private interface ChoixMembre { void choisi(JSONObject m); }
+
+    /** Liste des membres avec recherche par nom ou numéro. */
+    private void choisirMembre(final boolean actifsSeulement, final ChoixMembre apres) {
+        JSONArray a = CTX == null ? null : CTX.optJSONArray("membres");
+        if (a == null) return;
+        final java.util.ArrayList<JSONObject> tous = new java.util.ArrayList<>(), vus = new java.util.ArrayList<>();
+        for (int i = 0; i < a.length(); i++) if (!actifsSeulement || a.optJSONObject(i).optBoolean("actif", true)) tous.add(a.optJSONObject(i));
+        LinearLayout f = Ui.colonne(this);
+        final EditText q = champ("Rechercher un nom ou un numéro", InputType.TYPE_CLASS_TEXT, null);
+        f.addView(q);
+        final ListView lv = new ListView(this);
+        final ArrayAdapter<String> ad = new ArrayAdapter<>(this, android.R.layout.simple_list_item_1, new java.util.ArrayList<>());
+        lv.setAdapter(ad);
+        f.addView(lv, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, Ui.dp(360)));
+        final Runnable filtrer = () -> {
+            String s = q.getText().toString().trim().toLowerCase(Locale.FRANCE);
+            vus.clear();
+            ad.clear();
+            for (JSONObject m : tous) {
+                String lib = m.optString("i") + " — " + nomDe(m) + (m.optBoolean("actif", true) ? "" : " (inactif)");
+                if (s.isEmpty() || lib.toLowerCase(Locale.FRANCE).contains(s)) { vus.add(m); ad.add(lib); }
+            }
+        };
+        filtrer.run();
+        q.addTextChangedListener(new TextWatcher() {
+            public void beforeTextChanged(CharSequence s, int a1, int a2, int a3) { }
+            public void onTextChanged(CharSequence s, int a1, int a2, int a3) { filtrer.run(); }
+            public void afterTextChanged(Editable e) { }
+        });
+        final AlertDialog d = new AlertDialog.Builder(this).setTitle("Choisir le membre").setView(encadrer(f)).setNegativeButton("Annuler", null).create();
+        lv.setOnItemClickListener((p, v, pos, id) -> { d.dismiss(); apres.choisi(vus.get(pos)); });
+        d.show();
+    }
+
+    // ---- ENCAISSER
+    private void pageEncaisser(LinearLayout page) {
+        titre(page, "Encaisser", "Le reçu numéroté est émis par le logiciel du PC, puis publié au membre");
+        LinearLayout corps = marge(page);
+        bandeauEtat(corps);
+        if (!gestionPrete(corps)) return;
+        LinearLayout c = Ui.carte(this);
+        c.addView(Ui.etiquette(this, "Membre"));
+        TextView ch = Ui.texte(this, encMembre == null ? "Choisir le membre  ▾" : encMembre.optString("i") + " — " + nomDe(encMembre) + "  ▾", 16.5f, Ui.VERT_TEXTE, true);
+        ch.setPadding(0, Ui.dp(6), 0, Ui.dp(2));
+        ch.setOnClickListener(v -> choisirMembre(true, m -> { encMembre = m; afficher(); }));
+        c.addView(ch);
+        corps.addView(c, Ui.large(Ui.dp(10)));
+        if (encMembre == null) return;
+
+        JSONArray cots = CTX.optJSONArray("cotisations"), mc = encMembre.optJSONArray("c");
+        final java.util.ArrayList<Integer> idx = new java.util.ArrayList<>();
+        final java.util.ArrayList<Spinner> periodes = new java.util.ArrayList<>();
+        final java.util.ArrayList<EditText> montants = new java.util.ArrayList<>();
+        section(corps, "Montants versés");
+        for (int i = 0; cots != null && mc != null && i < cots.length() && i < mc.length(); i++) {
+            JSONObject k = cots.optJSONObject(i), x = mc.optJSONObject(i);
+            if (k == null || x == null || x.optBoolean("nc")) continue;
+            LinearLayout kc = Ui.carte(this);
+            LinearLayout l = Ui.ligne(this);
+            l.addView(Ui.texte(this, k.optString("nom"), 15, Ui.TEXTE, true), Ui.poids(1));
+            double r = x.optDouble("r", 0);
+            l.addView(r > 0 ? Ui.puce(this, "Reste " + Ui.nombre(r), Ui.ROUGE_PALE, Ui.ROUGE) : Ui.puce(this, "À jour", Ui.VERT_PALE, Ui.VERT_TEXTE));
+            kc.addView(l);
+            JSONArray cols = k.optJSONArray("colonnes"), v = x.optJSONArray("v");
+            Spinner sp = liste(chaines(cols, "—"));
+            double attenduParPeriode = cols == null || cols.length() == 0 ? 0 : x.optDouble("a", 0) / cols.length();
+            int j0 = 0;
+            for (; cols != null && j0 < cols.length(); j0++) {
+                double vj = v == null || v.isNull(j0) ? 0 : v.optDouble(j0, 0);
+                if (vj <= 0 || (attenduParPeriode > 0 && vj < attenduParPeriode - 0.5)) break;
+            }
+            if (cols != null && j0 >= cols.length()) j0 = cols.length() - 1;
+            sp.setSelection(Math.max(0, j0));
+            LinearLayout l2 = Ui.ligne(this);
+            l2.addView(sp, Ui.poids(1));
+            l2.addView(Ui.espace(this, Ui.dp(8)));
+            EditText mt = champ(r > 0 && attenduParPeriode > 0 ? Ui.nombre(Math.min(r, attenduParPeriode)) : "Montant", InputType.TYPE_CLASS_NUMBER, null);
+            l2.addView(mt, Ui.poids(1));
+            kc.addView(l2, Ui.large(Ui.dp(6)));
+            corps.addView(kc, Ui.large(Ui.dp(8)));
+            idx.add(i);
+            periodes.add(sp);
+            montants.add(mt);
+        }
+        LinearLayout pc = Ui.carte(this);
+        libelle(pc, "Payé par (caisse)");
+        final String[] cs = caissesCtx();
+        final Spinner caisse = liste(cs);
+        pc.addView(caisse);
+        libelle(pc, "Date du paiement");
+        final TextView date = champDate(aujourdhui());
+        pc.addView(date);
+        corps.addView(pc, Ui.large(Ui.dp(10)));
+        corps.addView(boutonIcone(Icone.ENVOYER, "Encaisser et émettre le reçu", true, w -> {
+            try {
+                JSONArray lignes = new JSONArray();
+                double total = 0;
+                for (int n = 0; n < idx.size(); n++) {
+                    double mt = Double.parseDouble("0" + montants.get(n).getText().toString().replaceAll("[^0-9.]", ""));
+                    if (mt <= 0) continue;
+                    JSONObject k = cots.optJSONObject(idx.get(n));
+                    JSONObject li = new JSONObject();
+                    li.put("index", idx.get(n));
+                    li.put("nom", k.optString("nom"));
+                    li.put("j", periodes.get(n).getSelectedItemPosition());
+                    li.put("montant", mt);
+                    lignes.put(li);
+                    total += mt;
+                }
+                if (lignes.length() == 0) { message("Indiquez au moins un montant."); return; }
+                final JSONObject dn = new JSONObject();
+                dn.put("membre", encMembre.optString("i"));
+                dn.put("lignes", lignes);
+                dn.put("caisse", cs[caisse.getSelectedItemPosition()]);
+                dn.put("date", String.valueOf(date.getTag()));
+                final String resume = encMembre.optString("i") + " " + nomDe(encMembre) + " — " + Ui.argent(total, monnaie());
+                confirmer("Encaisser " + Ui.argent(total, monnaie()) + " ?", nomDe(encMembre) + " · " + cs[caisse.getSelectedItemPosition()]
+                        + "\n\nLe reçu sera émis par le logiciel du PC et publié au membre.", () -> envoyerOp("encaissement", resume, dn, () -> encMembre = null));
+            } catch (Exception e) {
+                message("Montant invalide.");
+            }
+        }), Ui.large(Ui.dp(14)));
+    }
+
+    // ---- DÉPENSES ET DONS
+    private void pageDepenses(LinearLayout page) {
+        titre(page, "Dépenses et dons", "Saisie enregistrée dans le logiciel du PC, avec sa caisse");
+        LinearLayout corps = marge(page);
+        bandeauEtat(corps);
+        if (!gestionPrete(corps)) return;
+        LinearLayout choix = Ui.ligne(this);
+        choix.addView(boutonIcone(Icone.PIECES, "Dépense", modeDepense, v -> { modeDepense = true; afficher(); }), Ui.poids(1));
+        choix.addView(Ui.espace(this, Ui.dp(10)));
+        choix.addView(boutonIcone(Icone.COEUR, "Don reçu", !modeDepense, v -> { modeDepense = false; afficher(); }), Ui.poids(1));
+        corps.addView(choix, Ui.large(Ui.dp(10)));
+        LinearLayout c = Ui.carte(this);
+        libelle(c, "Désignation");
+        final EditText des = champ(modeDepense ? "ex. Achat de chaises" : "ex. Don du parrain", InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_FLAG_CAP_SENTENCES, null);
+        c.addView(des);
+        libelle(c, "Montant (" + monnaie() + ")");
+        final EditText mt = champ("0", InputType.TYPE_CLASS_NUMBER, null);
+        c.addView(mt);
+        final String[] cats = chaines(CTX.optJSONArray("categories"), "Divers");
+        final Spinner cat = liste(cats);
+        final EditText donateur = champ("Nom du donateur (facultatif)", InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_FLAG_CAP_WORDS, null);
+        if (modeDepense) { libelle(c, "Catégorie"); c.addView(cat); }
+        else { libelle(c, "Donateur"); c.addView(donateur); }
+        libelle(c, modeDepense ? "Payé par (caisse)" : "Reçu dans (caisse)");
+        final String[] cs = caissesCtx();
+        final Spinner caisse = liste(cs);
+        c.addView(caisse);
+        libelle(c, "Date");
+        final TextView date = champDate(aujourdhui());
+        c.addView(date);
+        corps.addView(c, Ui.large(Ui.dp(10)));
+        corps.addView(boutonIcone(Icone.ENVOYER, modeDepense ? "Enregistrer la dépense" : "Enregistrer le don", true, w -> {
+            String d = des.getText().toString().trim();
+            double m;
+            try { m = Double.parseDouble(mt.getText().toString().replaceAll("[^0-9.]", "")); } catch (Exception e) { m = 0; }
+            if (d.isEmpty()) { message("Indiquez la désignation."); return; }
+            if (m <= 0) { message("Indiquez un montant supérieur à 0."); return; }
+            try {
+                JSONObject dn = new JSONObject();
+                dn.put("designation", d);
+                dn.put("montant", m);
+                dn.put("caisse", cs[caisse.getSelectedItemPosition()]);
+                dn.put("date", String.valueOf(date.getTag()));
+                if (modeDepense) dn.put("categorie", cats[cat.getSelectedItemPosition()]);
+                else dn.put("donateur", donateur.getText().toString().trim());
+                final double fm = m;
+                confirmer((modeDepense ? "Dépense de " : "Don de ") + Ui.argent(m, monnaie()) + " ?", d,
+                        () -> envoyerOp(modeDepense ? "depense" : "don", d + " — " + Ui.argent(fm, monnaie()), dn, null));
+            } catch (Exception e) {
+                message("Saisie invalide.");
+            }
+        }), Ui.large(Ui.dp(14)));
+    }
+
+    // ---- MEMBRES
+    private void pageMembres(LinearLayout page) {
+        titre(page, "Membres", "Ajout et mise à jour, appliqués par le logiciel du PC");
+        LinearLayout corps = marge(page);
+        bandeauEtat(corps);
+        if (!gestionPrete(corps)) return;
+        corps.addView(boutonIcone(Icone.PLUS, "Ajouter un membre", true, v -> ficheMembre(null)), Ui.large(Ui.dp(10)));
+        final EditText q = champ("Rechercher un nom ou un numéro", InputType.TYPE_CLASS_TEXT, null);
+        corps.addView(q, Ui.large(Ui.dp(10)));
+        final LinearLayout liste = Ui.colonne(this);
+        corps.addView(liste);
+        final JSONArray a = CTX.optJSONArray("membres");
+        final Runnable remplir = () -> {
+            liste.removeAllViews();
+            String s = q.getText().toString().trim().toLowerCase(Locale.FRANCE);
+            int n = 0;
+            for (int i = 0; a != null && i < a.length() && n < 80; i++) {
+                final JSONObject m = a.optJSONObject(i);
+                String lib = m.optString("i") + " " + nomDe(m) + " " + m.optString("fonction");
+                if (!s.isEmpty() && !lib.toLowerCase(Locale.FRANCE).contains(s)) continue;
+                n++;
+                LinearLayout l = Ui.ligne(this);
+                l.setPadding(Ui.dp(14), Ui.dp(12), Ui.dp(14), Ui.dp(12));
+                l.setBackground(Ui.bordure(Ui.CARTE, Ui.LIGNE, Ui.dp(12)));
+                LinearLayout t = Ui.colonne(this);
+                t.addView(Ui.texte(this, nomDe(m), 15, m.optBoolean("actif", true) ? Ui.TEXTE : Ui.DOUX, true));
+                t.addView(Ui.texte(this, m.optString("i") + (m.optString("fonction").isEmpty() ? "" : " · " + m.optString("fonction"))
+                        + (m.optString("contact").isEmpty() ? "" : " · " + m.optString("contact")), 12.5f, Ui.DOUX, false));
+                l.addView(t, Ui.poids(1));
+                if (!m.optBoolean("actif", true)) l.addView(Ui.puce(this, "Inactif", Ui.PISTE, Ui.DOUX));
+                l.setOnClickListener(v -> ficheMembre(m));
+                liste.addView(l, Ui.large(Ui.dp(8)));
+            }
+            if (n == 0) liste.addView(Ui.texte(this, "Aucun membre trouvé.", 14, Ui.DOUX, false), Ui.large(Ui.dp(12)));
+        };
+        remplir.run();
+        q.addTextChangedListener(new TextWatcher() {
+            public void beforeTextChanged(CharSequence s, int a1, int a2, int a3) { }
+            public void onTextChanged(CharSequence s, int a1, int a2, int a3) { remplir.run(); }
+            public void afterTextChanged(Editable e) { }
+        });
+    }
+
+    private void ficheMembre(final JSONObject m) {
+        final boolean nouveau = m == null;
+        LinearLayout f = Ui.colonne(this);
+        final EditText nom = champ("Nom", InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_FLAG_CAP_CHARACTERS, nouveau ? null : m.optString("nom"));
+        final EditText pre = champ("Prénoms", InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_FLAG_CAP_WORDS, nouveau ? null : m.optString("prenoms"));
+        final EditText tel = champ("Contact (téléphone)", InputType.TYPE_CLASS_PHONE, nouveau ? null : m.optString("contact"));
+        final EditText res = champ("Quartier / résidence", InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_FLAG_CAP_WORDS, nouveau ? null : m.optString("residence"));
+        final EditText fon = champ("Fonction (facultatif)", InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_FLAG_CAP_SENTENCES, nouveau ? null : m.optString("fonction"));
+        final String[] genres = {"Genre à préciser", "Homme", "Femme"};
+        final Spinner genre = liste(genres);
+        String g = nouveau ? "" : m.optString("genre");
+        genre.setSelection("H".equals(g) ? 1 : "F".equals(g) ? 2 : 0);
+        final CheckBox actif = new CheckBox(this);
+        actif.setText("Membre actif");
+        actif.setChecked(nouveau || m.optBoolean("actif", true));
+        f.addView(nom); f.addView(pre); f.addView(genre); f.addView(tel); f.addView(res); f.addView(fon);
+        if (!nouveau) f.addView(actif);
+        ScrollView sc = new ScrollView(this);
+        sc.addView(encadrer(f));
+        new AlertDialog.Builder(this).setTitle(nouveau ? "Ajouter un membre" : "Membre " + m.optString("i")).setView(sc)
+                .setPositiveButton(nouveau ? "Ajouter" : "Enregistrer", (d, w) -> {
+                    try {
+                        String gs = genre.getSelectedItemPosition() == 1 ? "H" : genre.getSelectedItemPosition() == 2 ? "F" : "";
+                        if (nouveau) {
+                            if (nom.getText().toString().trim().isEmpty()) { message("Indiquez le nom du membre."); return; }
+                            JSONObject dn = new JSONObject();
+                            dn.put("nom", nom.getText().toString().trim());
+                            dn.put("prenoms", pre.getText().toString().trim());
+                            dn.put("genre", gs);
+                            dn.put("contact", tel.getText().toString().trim());
+                            dn.put("residence", res.getText().toString().trim());
+                            dn.put("fonction", fon.getText().toString().trim());
+                            dn.put("dateAdhesion", aujourdhui());
+                            envoyerOp("membre_ajout", "Nouveau : " + (dn.optString("nom").toUpperCase(Locale.FRANCE) + " " + dn.optString("prenoms")).trim(), dn, null);
+                        } else {
+                            JSONObject ch = new JSONObject();
+                            String[][] champs = {{"nom", nom.getText().toString().trim()}, {"prenoms", pre.getText().toString().trim()},
+                                    {"contact", tel.getText().toString().trim()}, {"residence", res.getText().toString().trim()}, {"fonction", fon.getText().toString().trim()}};
+                            for (String[] c : champs) if (!c[1].equals(m.optString(c[0]))) ch.put(c[0], c[1]);
+                            if (!gs.equals(m.optString("genre"))) ch.put("genre", gs);
+                            if (actif.isChecked() != m.optBoolean("actif", true)) ch.put("actif", actif.isChecked());
+                            if (ch.length() == 0) { message("Aucune modification."); return; }
+                            JSONObject dn = new JSONObject();
+                            dn.put("membre", m.optString("i"));
+                            dn.put("champs", ch);
+                            JSONArray noms = ch.names();
+                            StringBuilder q = new StringBuilder();
+                            for (int i = 0; noms != null && i < noms.length(); i++) q.append(i == 0 ? "" : ", ").append(noms.getString(i));
+                            envoyerOp("membre_modif", m.optString("i") + " " + nomDe(m) + " : " + q, dn, null);
+                        }
+                    } catch (Exception e) {
+                        message("Saisie invalide.");
+                    }
+                })
+                .setNegativeButton("Annuler", null).show();
+    }
+
+    // ---- RÉUNIONS ET APPEL
+    private static final String[] STATUTS = {"P", "R", "A", "E"};
+    private static final String[] LIB_STATUTS = {"Présent", "Retard", "Absent", "Excusé"};
+
+    private void pageReunions(LinearLayout page) {
+        titre(page, "Réunions", reuSaisie == null ? "Appel des présents et amendes, appliqués par le logiciel du PC" : "Appel : touchez un membre pour changer son statut");
+        LinearLayout corps = marge(page);
+        bandeauEtat(corps);
+        if (!gestionPrete(corps)) return;
+        if (reuSaisie == null) {
+            corps.addView(boutonIcone(Icone.PLUS, "Nouvelle réunion et appel", true, v -> nouvelleReunion()), Ui.large(Ui.dp(10)));
+            JSONArray r = CTX.optJSONArray("reunions");
+            section(corps, "Réunions enregistrées");
+            if (r == null || r.length() == 0) { corps.addView(Ui.texte(this, "Aucune réunion pour l'instant.", 14, Ui.DOUX, false)); return; }
+            for (int i = r.length() - 1; i >= 0; i--) {
+                final JSONObject u = r.optJSONObject(i);
+                LinearLayout c = Ui.carte(this);
+                c.addView(Ui.texte(this, u.optString("objet"), 15.5f, Ui.TEXTE, true));
+                c.addView(Ui.texte(this, Ui.date(u.optString("date")) + (u.optString("lieu").isEmpty() ? "" : " · " + u.optString("lieu")) + " · " + u.optInt("n") + " présence(s) notée(s)", 13, Ui.DOUX, false));
+                c.addView(bouton("Compléter l'appel", false, v -> {
+                    reuSaisie = u;
+                    presences.clear();
+                    afficher();
+                }), Ui.large(Ui.dp(10)));
+                corps.addView(c, Ui.large(Ui.dp(10)));
+            }
+            return;
+        }
+        LinearLayout tete = Ui.carte(this);
+        tete.addView(Ui.texte(this, reuSaisie.optString("objet"), 16, Ui.TEXTE, true));
+        tete.addView(Ui.texte(this, Ui.date(reuSaisie.optString("date")) + (reuSaisie.optString("lieu").isEmpty() ? "" : " · " + reuSaisie.optString("lieu")), 13, Ui.DOUX, false));
+        int[] nb = new int[4];
+        for (String s : presences.values()) for (int k = 0; k < 4; k++) if (STATUTS[k].equals(s)) nb[k]++;
+        tete.addView(Ui.texte(this, nb[0] + " présent(s) · " + nb[1] + " retard(s) · " + nb[2] + " absent(s) · " + nb[3] + " excusé(s)", 13.5f, Ui.VERT_TEXTE, true), Ui.large(Ui.dp(6)));
+        corps.addView(tete, Ui.large(Ui.dp(10)));
+        LinearLayout b = Ui.ligne(this);
+        b.addView(bouton("Tous présents", false, v -> {
+            JSONArray a = CTX.optJSONArray("membres");
+            for (int i = 0; a != null && i < a.length(); i++) if (a.optJSONObject(i).optBoolean("actif", true) && !presences.containsKey(a.optJSONObject(i).optString("i"))) presences.put(a.optJSONObject(i).optString("i"), "P");
+            afficher();
+        }), Ui.poids(1));
+        b.addView(Ui.espace(this, Ui.dp(8)));
+        b.addView(bouton("Annuler", false, v -> { reuSaisie = null; presences.clear(); afficher(); }), Ui.poids(1));
+        corps.addView(b, Ui.large(Ui.dp(10)));
+        JSONArray a = CTX.optJSONArray("membres");
+        for (int i = 0; a != null && i < a.length(); i++) {
+            final JSONObject m = a.optJSONObject(i);
+            if (!m.optBoolean("actif", true)) continue;
+            final String id = m.optString("i"), st = presences.get(id);
+            LinearLayout l = Ui.ligne(this);
+            l.setPadding(Ui.dp(14), Ui.dp(10), Ui.dp(10), Ui.dp(10));
+            l.setBackground(Ui.bordure(Ui.CARTE, Ui.LIGNE, Ui.dp(12)));
+            LinearLayout t = Ui.colonne(this);
+            t.addView(Ui.texte(this, nomDe(m), 14.5f, Ui.TEXTE, true));
+            t.addView(Ui.texte(this, id, 12, Ui.DOUX, false));
+            l.addView(t, Ui.poids(1));
+            int k = st == null ? -1 : java.util.Arrays.asList(STATUTS).indexOf(st);
+            int fondP = k == 0 ? Ui.VERT_PALE : k == 1 ? Ui.OR_PALE : k == 2 ? Ui.ROUGE_PALE : k == 3 ? Ui.PISTE : Ui.PISTE;
+            int encre = k == 0 ? Ui.VERT_TEXTE : k == 1 ? Ui.ORANGE : k == 2 ? Ui.ROUGE : Ui.DOUX;
+            l.addView(Ui.puce(this, k < 0 ? "— à noter" : LIB_STATUTS[k], fondP, encre));
+            l.setOnClickListener(v -> {
+                int n = st == null ? 0 : java.util.Arrays.asList(STATUTS).indexOf(st) + 1;
+                if (n >= 4) presences.remove(id); else presences.put(id, STATUTS[n]);
+                afficher();
+            });
+            corps.addView(l, Ui.large(Ui.dp(6)));
+        }
+        corps.addView(boutonIcone(Icone.ENVOYER, "Envoyer l'appel (" + presences.size() + ")", true, v -> {
+            if (presences.isEmpty()) { message("Notez au moins une présence."); return; }
+            try {
+                JSONObject dn = new JSONObject();
+                if (reuSaisie.has("id")) dn.put("reunionId", reuSaisie.optString("id"));
+                dn.put("date", reuSaisie.optString("date"));
+                dn.put("objet", reuSaisie.optString("objet"));
+                dn.put("lieu", reuSaisie.optString("lieu"));
+                dn.put("amendes", reuSaisie.optJSONObject("amendes") == null ? new JSONObject() : reuSaisie.optJSONObject("amendes"));
+                JSONObject pr = new JSONObject();
+                for (java.util.Map.Entry<String, String> e : presences.entrySet()) pr.put(e.getKey(), e.getValue());
+                dn.put("presences", pr);
+                envoyerOp("reunion", reuSaisie.optString("objet") + " du " + Ui.date(reuSaisie.optString("date")) + " : " + presences.size() + " présence(s)", dn,
+                        () -> { reuSaisie = null; presences.clear(); });
+            } catch (Exception e) {
+                message("Appel illisible.");
+            }
+        }), Ui.large(Ui.dp(14)));
+    }
+
+    private void nouvelleReunion() {
+        LinearLayout f = Ui.colonne(this);
+        final EditText objet = champ("Objet (ex. Assemblée mensuelle)", InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_FLAG_CAP_SENTENCES, "Réunion mensuelle");
+        final EditText lieu = champ("Lieu", InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_FLAG_CAP_WORDS, null);
+        final TextView date = champDate(aujourdhui());
+        final EditText amA = champ("Amende d'absence (" + monnaie() + ")", InputType.TYPE_CLASS_NUMBER, null);
+        final EditText amR = champ("Amende de retard (" + monnaie() + ")", InputType.TYPE_CLASS_NUMBER, null);
+        f.addView(objet); f.addView(date); f.addView(lieu); f.addView(amA); f.addView(amR);
+        new AlertDialog.Builder(this).setTitle("Nouvelle réunion").setView(encadrer(f))
+                .setPositiveButton("Faire l'appel", (d, w) -> {
+                    try {
+                        JSONObject u = new JSONObject();
+                        u.put("objet", objet.getText().toString().trim().isEmpty() ? "Réunion" : objet.getText().toString().trim());
+                        u.put("date", String.valueOf(date.getTag()));
+                        u.put("lieu", lieu.getText().toString().trim());
+                        JSONObject am = new JSONObject();
+                        am.put("A", entier(amA.getText().toString()));
+                        am.put("R", entier(amR.getText().toString()));
+                        u.put("amendes", am);
+                        reuSaisie = u;
+                        presences.clear();
+                        afficher();
+                    } catch (Exception e) {
+                        message("Saisie invalide.");
+                    }
+                }).setNegativeButton("Annuler", null).show();
+    }
+
+    // ---- SOLIDARITÉ
+    private void pageSolidarite(LinearLayout page) {
+        titre(page, "Solidarité", "Décès, naissance, mariage, maladie : contribution et aide remise");
+        LinearLayout corps = marge(page);
+        bandeauEtat(corps);
+        if (!gestionPrete(corps)) return;
+        corps.addView(boutonIcone(Icone.PLUS, "Nouvel événement", true, v -> nouvelEvenement()), Ui.large(Ui.dp(10)));
+        corps.addView(info(Icone.PIECES, "Les contributions des membres s'encaissent dans « Encaisser » : la cotisation « Solidarité — … » y apparaît après application par le PC."), Ui.large(Ui.dp(10)));
+        JSONArray e = CTX.optJSONArray("evenements");
+        section(corps, "Événements");
+        if (e == null || e.length() == 0) { corps.addView(Ui.texte(this, "Aucun événement pour l'instant.", 14, Ui.DOUX, false)); return; }
+        JSONObject types = CTX.optJSONObject("typesEvenement");
+        for (int i = e.length() - 1; i >= 0; i--) {
+            final JSONObject ev = e.optJSONObject(i);
+            LinearLayout c = Ui.carte(this);
+            LinearLayout l = Ui.ligne(this);
+            l.addView(Ui.texte(this, ev.optString("libelle"), 15.5f, Ui.TEXTE, true), Ui.poids(1));
+            l.addView(ev.optDouble("aide", 0) > 0 ? Ui.puce(this, "Aide remise", Ui.VERT_PALE, Ui.VERT_TEXTE) : Ui.puce(this, "Aide à remettre", Ui.OR_PALE, Ui.ORANGE));
+            c.addView(l);
+            String t = (types == null ? ev.optString("type") : types.optString(ev.optString("type"), ev.optString("type"))) + " · " + Ui.date(ev.optString("date"))
+                    + (ev.optString("beneficiaire").isEmpty() ? "" : " · " + ev.optString("beneficiaire"))
+                    + (ev.optDouble("contribution", 0) > 0 ? " · " + Ui.argent(ev.optDouble("contribution"), monnaie()) + " par membre" : "");
+            c.addView(Ui.texte(this, t, 13, Ui.DOUX, false));
+            if (ev.optDouble("aide", 0) > 0) c.addView(Ui.texte(this, "Aide remise : " + Ui.argent(ev.optDouble("aide"), monnaie()), 13.5f, Ui.VERT_TEXTE, true), Ui.large(Ui.dp(6)));
+            else c.addView(bouton("Remettre l'aide", false, v -> remettreAide(ev)), Ui.large(Ui.dp(10)));
+            corps.addView(c, Ui.large(Ui.dp(10)));
+        }
+    }
+
+    private void nouvelEvenement() {
+        JSONObject types = CTX.optJSONObject("typesEvenement");
+        final String[] cles = {"deces", "naissance", "mariage", "maladie", "autre"};
+        final String[] libs = new String[cles.length];
+        for (int i = 0; i < cles.length; i++) libs[i] = types == null ? cles[i] : types.optString(cles[i], cles[i]);
+        LinearLayout f = Ui.colonne(this);
+        final Spinner type = liste(libs);
+        final EditText lib = champ("Objet (ex. Décès du père de M. X)", InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_FLAG_CAP_SENTENCES, null);
+        final EditText ben = champ("Bénéficiaire", InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_FLAG_CAP_WORDS, null);
+        final TextView date = champDate(aujourdhui());
+        final EditText con = champ("Contribution par membre (" + monnaie() + ", 0 si aucune)", InputType.TYPE_CLASS_NUMBER, null);
+        f.addView(type); f.addView(lib); f.addView(ben); f.addView(date); f.addView(con);
+        new AlertDialog.Builder(this).setTitle("Nouvel événement de solidarité").setView(encadrer(f))
+                .setPositiveButton("Enregistrer", (d, w) -> {
+                    String l = lib.getText().toString().trim();
+                    if (l.isEmpty()) { message("Indiquez l'objet de l'événement."); return; }
+                    try {
+                        JSONObject dn = new JSONObject();
+                        dn.put("type", cles[type.getSelectedItemPosition()]);
+                        dn.put("libelle", l);
+                        dn.put("beneficiaire", ben.getText().toString().trim());
+                        dn.put("date", String.valueOf(date.getTag()));
+                        dn.put("contribution", entier(con.getText().toString()));
+                        envoyerOp("solidarite_evt", l, dn, null);
+                    } catch (Exception e) {
+                        message("Saisie invalide.");
+                    }
+                }).setNegativeButton("Annuler", null).show();
+    }
+
+    private void remettreAide(final JSONObject ev) {
+        LinearLayout f = Ui.colonne(this);
+        final EditText mt = champ("Montant remis (" + monnaie() + ")", InputType.TYPE_CLASS_NUMBER, null);
+        final String[] cs = caissesCtx();
+        final Spinner caisse = liste(cs);
+        final TextView date = champDate(aujourdhui());
+        f.addView(mt); f.addView(caisse); f.addView(date);
+        new AlertDialog.Builder(this).setTitle("Remettre l'aide — " + ev.optString("libelle")).setView(encadrer(f))
+                .setPositiveButton("Enregistrer", (d, w) -> {
+                    int m = entier(mt.getText().toString());
+                    if (m <= 0) { message("Indiquez le montant remis."); return; }
+                    try {
+                        JSONObject dn = new JSONObject();
+                        dn.put("evenementId", ev.optString("id"));
+                        dn.put("montant", m);
+                        dn.put("caisse", cs[caisse.getSelectedItemPosition()]);
+                        dn.put("date", String.valueOf(date.getTag()));
+                        envoyerOp("solidarite_aide", "Aide « " + ev.optString("libelle") + " » — " + Ui.argent(m, monnaie()), dn, null);
+                    } catch (Exception e) {
+                        message("Saisie invalide.");
+                    }
+                }).setNegativeButton("Annuler", null).show();
+    }
+
+    // ---- OPÉRATIONS ENVOYÉES
+    private void pageOperations(LinearLayout page) {
+        titre(page, "Opérations envoyées", "Résultat de chaque opération, appliquée par le logiciel du PC");
+        LinearLayout corps = marge(page);
+        bandeauEtat(corps);
+        if (!gestionPrete(corps)) return;
+        corps.addView(info(Icone.ACTUALISER, "Une opération reste « En attente » tant que le logiciel AMEDIS pro Asso n'est pas ouvert sur le PC du trésorier avec Internet. Il l'applique alors, émet le reçu au besoin et publie."), Ui.large(Ui.dp(10)));
+        JSONArray f = bureau.fileOps();
+        if (f.length() > 0) {
+            section(corps, "Sur le téléphone (pas encore envoyées)");
+            for (int i = 0; i < f.length(); i++) {
+                JSONObject o = f.optJSONObject(i);
+                LinearLayout c = Ui.carte(this);
+                c.addView(Ui.texte(this, o.optString("resume"), 14.5f, Ui.TEXTE, true));
+                c.addView(Ui.puce(this, "Attend Internet", Ui.OR_PALE, Ui.ORANGE), Ui.large(Ui.dp(6)));
+                corps.addView(c, Ui.large(Ui.dp(8)));
+            }
+        }
+        JSONArray l = CTX.optJSONArray("operations");
+        section(corps, "Envoyées au site");
+        if (l == null || l.length() == 0) { corps.addView(Ui.texte(this, "Aucune opération pour l'instant.", 14, Ui.DOUX, false)); return; }
+        for (int i = 0; i < l.length(); i++) {
+            JSONObject o = l.optJSONObject(i);
+            LinearLayout c = Ui.carte(this);
+            LinearLayout r = Ui.ligne(this);
+            r.addView(Ui.texte(this, o.optString("libelle"), 14.5f, Ui.TEXTE, true), Ui.poids(1));
+            String st = o.optString("statut");
+            r.addView("Appliquée".equals(st) ? Ui.puce(this, st, Ui.VERT_PALE, Ui.VERT_TEXTE) : "Rejetée".equals(st) ? Ui.puce(this, st, Ui.ROUGE_PALE, Ui.ROUGE) : Ui.puce(this, st, Ui.OR_PALE, Ui.ORANGE));
+            c.addView(r);
+            c.addView(Ui.texte(this, o.optString("resume"), 13.5f, Ui.TEXTE, false), Ui.large(Ui.dp(4)));
+            c.addView(Ui.texte(this, "Envoyée le " + Ui.moment(o.optString("recueLe")) + (o.optString("resultat").isEmpty() ? "" : "\n" + o.optString("resultat")), 12.5f, Ui.DOUX, false), Ui.large(Ui.dp(4)));
+            corps.addView(c, Ui.large(Ui.dp(8)));
+        }
+    }
+
+    // ================================================================== tableau de bord : chiffres de l'association et raccourcis
+    private void blocTresorier(LinearLayout corps) {
+        if (!estTresorier()) return;
+        section(corps, "Gestion rapide");
+        LinearLayout r = Ui.ligne(this);
+        r.addView(boutonIcone(Icone.PIECES, "Encaisser", true, v -> choisir(T_G_ENC)), Ui.poids(1));
+        r.addView(Ui.espace(this, Ui.dp(8)));
+        r.addView(boutonIcone(Icone.CALENDRIER, "Appel", false, v -> choisir(T_G_REU)), Ui.poids(1));
+        corps.addView(r);
+        LinearLayout r2 = Ui.ligne(this);
+        r2.addView(boutonIcone(Icone.LISTE, "Dépense / don", false, v -> choisir(T_G_DEP)), Ui.poids(1));
+        r2.addView(Ui.espace(this, Ui.dp(8)));
+        r2.addView(boutonIcone(Icone.ENVELOPPE, "Message", false, v -> choisir(T_MESSAGES)), Ui.poids(1));
+        corps.addView(r2, Ui.large(Ui.dp(8)));
     }
 
     // ================================================================== mise à jour de l'appli (GitHub, sans Play Store)

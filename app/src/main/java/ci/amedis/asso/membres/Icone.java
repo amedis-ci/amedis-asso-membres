@@ -10,7 +10,9 @@ import android.view.View;
 /** Icônes dessinées au trait (grille de 24 x 24), sans fichier image. */
 final class Icone extends View {
     static final int MAISON = 1, RECU = 2, CARTE = 3, GROUPE = 4, TEL = 5, MESSAGE = 6, OK = 7, ALERTE = 8,
-            CADENAS = 9, QR = 10, ACTUALISER = 11, LIEN = 12, PERSONNE = 13, NUAGE = 14, BOUCLIER = 15;
+            CADENAS = 9, QR = 10, ACTUALISER = 11, LIEN = 12, PERSONNE = 13, NUAGE = 14, BOUCLIER = 15,
+            MENU = 16, TABLEAU = 17, ENVELOPPE = 18, CALENDRIER = 19, COEUR = 20, MICRO = 21, LECTURE = 22, PAUSE = 23,
+            ENVOYER = 24, PIECES = 25, REGLAGES = 26, SORTIE = 27, LISTE = 28, PLUS = 29;
 
     private final int type;
     private final Paint p = new Paint(Paint.ANTI_ALIAS_FLAG);
@@ -38,6 +40,7 @@ final class Icone extends View {
         cv.translate((getWidth() - 24 * k) / 2, (getHeight() - 24 * k) / 2);
         cv.scale(k, k);
         p.setStrokeWidth(1.9f);
+        p.setStyle(type == LECTURE ? Paint.Style.FILL_AND_STROKE : Paint.Style.STROKE);
         chemin.reset();
         switch (type) {
             case MAISON:
@@ -118,6 +121,68 @@ final class Icone extends View {
                 chemin.moveTo(12, 3); chemin.lineTo(19.5f, 6); chemin.lineTo(19.5f, 11.5f);
                 chemin.quadTo(19.5f, 18, 12, 21); chemin.quadTo(4.5f, 18, 4.5f, 11.5f); chemin.lineTo(4.5f, 6); chemin.close();
                 chemin.moveTo(8.5f, 12); chemin.lineTo(11, 14.5f); chemin.lineTo(15.5f, 9.5f);
+                break;
+            case MENU:
+                chemin.moveTo(4, 7); chemin.lineTo(20, 7); chemin.moveTo(4, 12); chemin.lineTo(20, 12); chemin.moveTo(4, 17); chemin.lineTo(20, 17);
+                break;
+            case TABLEAU:
+                chemin.moveTo(4, 20); chemin.lineTo(20, 20);
+                r.set(5.5f, 12, 8.5f, 20); chemin.addRect(r, Path.Direction.CW);
+                r.set(10.5f, 6, 13.5f, 20); chemin.addRect(r, Path.Direction.CW);
+                r.set(15.5f, 9.5f, 18.5f, 20); chemin.addRect(r, Path.Direction.CW);
+                break;
+            case ENVELOPPE:
+                r.set(3, 5.5f, 21, 18.5f); chemin.addRoundRect(r, 2, 2, Path.Direction.CW);
+                chemin.moveTo(3.5f, 7); chemin.lineTo(12, 13); chemin.lineTo(20.5f, 7);
+                break;
+            case CALENDRIER:
+                r.set(3.5f, 5, 20.5f, 20.5f); chemin.addRoundRect(r, 2, 2, Path.Direction.CW);
+                chemin.moveTo(3.5f, 10); chemin.lineTo(20.5f, 10); chemin.moveTo(8, 3); chemin.lineTo(8, 7); chemin.moveTo(16, 3); chemin.lineTo(16, 7);
+                chemin.moveTo(8, 14); chemin.lineTo(8.1f, 14); chemin.moveTo(12, 14); chemin.lineTo(12.1f, 14); chemin.moveTo(16, 14); chemin.lineTo(16.1f, 14);
+                break;
+            case COEUR:
+                chemin.moveTo(12, 20); chemin.cubicTo(4, 14.5f, 2.5f, 10, 4.5f, 7); chemin.cubicTo(6.5f, 4, 10.5f, 4.5f, 12, 7.5f);
+                chemin.cubicTo(13.5f, 4.5f, 17.5f, 4, 19.5f, 7); chemin.cubicTo(21.5f, 10, 20, 14.5f, 12, 20); chemin.close();
+                break;
+            case MICRO:
+                r.set(9, 3, 15, 14); chemin.addRoundRect(r, 3, 3, Path.Direction.CW);
+                chemin.moveTo(5.5f, 11); chemin.quadTo(5.5f, 17.5f, 12, 17.5f); chemin.quadTo(18.5f, 17.5f, 18.5f, 11);
+                chemin.moveTo(12, 17.5f); chemin.lineTo(12, 21); chemin.moveTo(9, 21); chemin.lineTo(15, 21);
+                break;
+            case LECTURE:
+                chemin.moveTo(8, 5); chemin.lineTo(19, 12); chemin.lineTo(8, 19); chemin.close();
+                break;
+            case PAUSE:
+                chemin.moveTo(9, 5); chemin.lineTo(9, 19); chemin.moveTo(15, 5); chemin.lineTo(15, 19);
+                break;
+            case ENVOYER:
+                chemin.moveTo(3.5f, 11.5f); chemin.lineTo(20.5f, 4); chemin.lineTo(14, 20.5f); chemin.lineTo(11, 13); chemin.close();
+                chemin.moveTo(11, 13); chemin.lineTo(20.5f, 4);
+                break;
+            case PIECES:
+                chemin.addCircle(9, 9, 5.5f, Path.Direction.CW);
+                chemin.moveTo(14.5f, 10); chemin.quadTo(20.5f, 11, 20.5f, 15); chemin.quadTo(20.5f, 20.5f, 15, 20.5f); chemin.quadTo(11, 20.5f, 10, 14.5f);
+                chemin.moveTo(9, 6.5f); chemin.lineTo(9, 11.5f);
+                break;
+            case REGLAGES:
+                chemin.addCircle(12, 12, 3, Path.Direction.CW);
+                for (int i = 0; i < 8; i++) {
+                    double a = Math.PI / 4 * i;
+                    chemin.moveTo(12 + (float) (Math.cos(a) * 6.5), 12 + (float) (Math.sin(a) * 6.5));
+                    chemin.lineTo(12 + (float) (Math.cos(a) * 9), 12 + (float) (Math.sin(a) * 9));
+                }
+                chemin.addCircle(12, 12, 6.5f, Path.Direction.CW);
+                break;
+            case SORTIE:
+                chemin.moveTo(10, 4); chemin.lineTo(5, 4); chemin.lineTo(5, 20); chemin.lineTo(10, 20);
+                chemin.moveTo(10, 12); chemin.lineTo(20, 12); chemin.moveTo(16, 8); chemin.lineTo(20, 12); chemin.lineTo(16, 16);
+                break;
+            case LISTE:
+                chemin.moveTo(9, 7); chemin.lineTo(20, 7); chemin.moveTo(9, 12); chemin.lineTo(20, 12); chemin.moveTo(9, 17); chemin.lineTo(20, 17);
+                chemin.moveTo(4.5f, 7); chemin.lineTo(4.6f, 7); chemin.moveTo(4.5f, 12); chemin.lineTo(4.6f, 12); chemin.moveTo(4.5f, 17); chemin.lineTo(4.6f, 17);
+                break;
+            case PLUS:
+                chemin.moveTo(12, 5); chemin.lineTo(12, 19); chemin.moveTo(5, 12); chemin.lineTo(19, 12);
                 break;
             default:
                 break;
