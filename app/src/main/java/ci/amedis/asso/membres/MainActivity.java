@@ -33,7 +33,9 @@ import android.widget.FrameLayout;
 import android.widget.ImageView;
 import android.widget.LinearLayout;
 import android.widget.ProgressBar;
+import android.widget.ArrayAdapter;
 import android.widget.ScrollView;
+import android.widget.Spinner;
 import android.widget.TextView;
 import android.widget.Toast;
 
@@ -68,19 +70,22 @@ import java.util.concurrent.Executors;
  */
 public class MainActivity extends Activity {
 
-    private static final int T_ACCUEIL = 0, T_RECUS = 1, T_CARTE = 2, T_ASSO = 3;
-    private static final String[] NOMS_ONGLETS = {"Accueil", "Reçus", "Ma carte", "Association"};
-    private static final int[] ICONES_ONGLETS = {Icone.MAISON, Icone.RECU, Icone.CARTE, Icone.GROUPE};
+    private static final int T_ACCUEIL = 0, T_RECUS = 1, T_DEMARCHES = 2, T_CARTE = 3, T_ASSO = 4, NB_ONGLETS = 5;
+    private static final String[] NOMS_ONGLETS = {"Accueil", "Reçus", "Démarches", "Ma carte", "Association"};
+    private static final int[] ICONES_ONGLETS = {Icone.MAISON, Icone.RECU, Icone.MESSAGE, Icone.CARTE, Icone.GROUPE};
     private static final long UN_JOUR = 24L * 3600 * 1000, VERROU_APRES = 60 * 1000;
 
     private Donnees donnees;
+    private Demarches demarches;
+    private JSONObject DEM;            // démarches : les miennes, et celles du bureau si j'en fais partie
+    private View pastilleDem;
     private final ExecutorService fond = Executors.newSingleThreadExecutor();
     private final Handler ui = new Handler(Looper.getMainLooper());
 
     private FrameLayout racine, contenu;
     private ProgressBar chargementVue;
-    private final Icone[] icones = new Icone[4];
-    private final TextView[] libelles = new TextView[4];
+    private final Icone[] icones = new Icone[NB_ONGLETS];
+    private final TextView[] libelles = new TextView[NB_ONGLETS];
     private View pastilleRecus, bienvenue, verrou, site;
     private WebView web;
     private SwipeRefreshLayout tirer;
@@ -99,6 +104,8 @@ public class MainActivity extends Activity {
         getWindow().setStatusBarColor(Ui.VERT_FONCE);
         getWindow().setNavigationBarColor(Ui.CARTE);
         donnees = new Donnees(getSharedPreferences("amedis", MODE_PRIVATE));
+        demarches = new Demarches(donnees, getSharedPreferences("amedis", MODE_PRIVATE));
+        DEM = demarches.listeMemorisee();
 
         racine = new FrameLayout(this);
         racine.setBackgroundColor(Ui.FOND);
@@ -176,13 +183,19 @@ public class MainActivity extends Activity {
         LinearLayout barre = Ui.ligne(this);
         barre.setBackgroundColor(Ui.CARTE);
         barre.setPadding(0, Ui.dp(6), 0, Ui.dp(8));
-        for (int i = 0; i < 4; i++) {
+        for (int i = 0; i < NB_ONGLETS; i++) {
             final int n = i;
             LinearLayout b = Ui.colonne(this);
             b.setGravity(Gravity.CENTER_HORIZONTAL);
             FrameLayout cadre = new FrameLayout(this);
             icones[i] = new Icone(this, ICONES_ONGLETS[i], Ui.DOUX);
             cadre.addView(icones[i], new FrameLayout.LayoutParams(Ui.dp(26), Ui.dp(26)));
+            if (i == T_DEMARCHES) {
+                pastilleDem = new View(this);
+                pastilleDem.setBackground(Ui.arrondi(Ui.ROUGE, Ui.dp(5)));
+                pastilleDem.setVisibility(View.GONE);
+                cadre.addView(pastilleDem, new FrameLayout.LayoutParams(Ui.dp(10), Ui.dp(10), Gravity.END | Gravity.TOP));
+            }
             if (i == T_RECUS) {
                 pastilleRecus = new View(this);
                 pastilleRecus.setBackground(Ui.arrondi(Ui.ROUGE, Ui.dp(5)));
@@ -190,7 +203,8 @@ public class MainActivity extends Activity {
                 cadre.addView(pastilleRecus, new FrameLayout.LayoutParams(Ui.dp(10), Ui.dp(10), Gravity.END | Gravity.TOP));
             }
             b.addView(cadre);
-            libelles[i] = Ui.texte(this, NOMS_ONGLETS[i], 11.5f, Ui.DOUX, true);
+            libelles[i] = Ui.texte(this, NOMS_ONGLETS[i], 10.5f, Ui.DOUX, true);
+            libelles[i].setMaxLines(1);
             b.addView(libelles[i]);
             b.setOnClickListener(v -> choisir(n));
             barre.addView(b, Ui.poids(1));
@@ -208,13 +222,14 @@ public class MainActivity extends Activity {
     private void choisir(int n) {
         onglet = n;
         if (n == T_RECUS) marquerRecusVus();
+        if (n == T_DEMARCHES) { pastilleDem.setVisibility(View.GONE); signalerReponses(); synchroniserDemarches(); }
         majBarre();
         afficher();
         luminosite();
     }
 
     private void majBarre() {
-        for (int i = 0; i < 4; i++) {
+        for (int i = 0; i < NB_ONGLETS; i++) {
             int c = i == onglet ? Ui.VERT_TEXTE : Ui.DOUX;
             icones[i].couleur(c);
             libelles[i].setTextColor(c);
@@ -234,6 +249,7 @@ public class MainActivity extends Activity {
         page.setPadding(0, 0, 0, Ui.dp(24));
         switch (onglet) {
             case T_RECUS: pageRecus(page); break;
+            case T_DEMARCHES: pageDemarches(page); break;
             case T_CARTE: pageCarte(page); break;
             case T_ASSO: pageAsso(page); break;
             default: pageAccueil(page); break;
@@ -456,8 +472,13 @@ public class MainActivity extends Activity {
             corps.addView(tous);
         }
 
+        TextView dem = Ui.texte(this, "Déclarer un paiement ou écrire au bureau  →", 14, Ui.VERT_TEXTE, true);
+        dem.setPadding(Ui.dp(4), Ui.dp(16), 0, 0);
+        dem.setOnClickListener(v -> choisir(T_DEMARCHES));
+        corps.addView(dem);
+
         TextView pied = Ui.texte(this, "Informations publiées par le trésorier le " + Ui.moment(M.optString("publieLe", ""))
-                + ". Consultation seulement.", 12, Ui.DOUX, false);
+                + ". Vos montants changent après saisie par le trésorier.", 12, Ui.DOUX, false);
         pied.setGravity(Gravity.CENTER);
         pied.setPadding(Ui.dp(8), Ui.dp(24), Ui.dp(8), 0);
         corps.addView(pied);
@@ -770,7 +791,7 @@ public class MainActivity extends Activity {
         corps.addView(reg);
 
         TextView cr = Ui.texte(this, "AMEDIS Asso " + BuildConfig.VERSION_NAME + "\nConception : M. KAMAGATE, Inspecteur d'Orientation, CIO Bouaké 2.\n"
-                + "Consultation seulement : aucune donnée ne peut être modifiée depuis l'appli.", 12, Ui.DOUX, false);
+                + "Les démarches sont transmises au bureau : aucune cotisation ni aucun reçu ne peut être modifié depuis l'appli.", 12, Ui.DOUX, false);
         cr.setGravity(Gravity.CENTER);
         cr.setPadding(Ui.dp(8), Ui.dp(22), Ui.dp(8), 0);
         corps.addView(cr);
@@ -828,6 +849,362 @@ public class MainActivity extends Activity {
         parent.addView(l);
     }
 
+    // ================================================================== DÉMARCHES (membre) et ESPACE BUREAU
+    private static final String[] MODES_PAIEMENT = {"Orange Money", "MTN MoMo", "Moov Money", "Wave",
+            "Espèces remises à un membre du bureau", "Virement bancaire", "Autre"};
+
+    private void pageDemarches(LinearLayout page) {
+        titre(page, "Mes démarches", "Vos demandes au bureau, suivies jusqu'à la réponse");
+        LinearLayout corps = marge(page);
+        bandeauEtat(corps);
+        if (!demarches.possible()) {
+            inviterAccesComplet(corps, "Les démarches se font depuis votre dossier personnel ou avec votre identifiant : "
+                    + "la carte de membre seule sert uniquement à vous identifier.");
+            return;
+        }
+        if (DEM != null && !DEM.optBoolean("ok") && !DEM.optString("erreur").isEmpty()) {
+            LinearLayout b = Ui.carte(this);
+            b.addView(Ui.texte(this, DEM.optString("erreur"), 13.5f, Ui.ROUGE, false));
+            corps.addView(b, Ui.large(Ui.dp(10)));
+        }
+
+        // nouvelles démarches
+        section(corps, "Nouvelle démarche");
+        LinearLayout r1 = Ui.ligne(this), r2 = Ui.ligne(this);
+        r1.addView(tuileAction(Icone.RECU, "Déclarer un paiement", "Mobile Money, espèces…", v -> formulairePaiement()), Ui.poids(1));
+        r1.addView(Ui.espace(this, Ui.dp(10)));
+        r1.addView(tuileAction(Icone.PERSONNE, "Mes coordonnées", "Téléphone, quartier…", v -> formulaireTexte("coordonnees")), Ui.poids(1));
+        r2.addView(tuileAction(Icone.ALERTE, "Signaler un événement", "Décès, naissance, mariage…", v -> formulaireTexte("solidarite")), Ui.poids(1));
+        r2.addView(Ui.espace(this, Ui.dp(10)));
+        r2.addView(tuileAction(Icone.MESSAGE, "Écrire au bureau", "Question, suggestion", v -> formulaireTexte("message")), Ui.poids(1));
+        corps.addView(r1);
+        corps.addView(r2, Ui.large(Ui.dp(10)));
+
+        // file hors connexion
+        int n = demarches.file().length();
+        if (n > 0) {
+            LinearLayout b = Ui.ligne(this);
+            b.setPadding(Ui.dp(14), Ui.dp(12), Ui.dp(14), Ui.dp(12));
+            b.setBackground(Ui.arrondi(Ui.OR_PALE, Ui.dp(12)));
+            b.addView(new Icone(this, Icone.NUAGE, Ui.ORANGE), new LinearLayout.LayoutParams(Ui.dp(22), Ui.dp(22)));
+            b.addView(Ui.espace(this, Ui.dp(10)));
+            b.addView(Ui.texte(this, n + (n > 1 ? " démarches gardées" : " démarche gardée") + " sur le téléphone : envoi automatique au retour d'Internet.",
+                    13.5f, Ui.TEXTE, false), Ui.poids(1));
+            corps.addView(b, Ui.large(Ui.dp(14)));
+        }
+
+        // mes démarches
+        JSONArray m = DEM == null ? null : DEM.optJSONArray("miennes");
+        section(corps, "Suivi" + (m == null || m.length() == 0 ? "" : " (" + m.length() + ")"));
+        if (m == null || m.length() == 0) {
+            LinearLayout c = Ui.carte(this);
+            c.addView(Ui.texte(this, DEM == null ? "Tirez l'écran vers le bas pour charger vos démarches."
+                    : "Aucune démarche pour l'instant.", 13.5f, Ui.DOUX, false));
+            corps.addView(c);
+        } else {
+            for (int i = 0; i < m.length(); i++) corps.addView(carteDemarche(m.optJSONObject(i), false, false), Ui.large(i == 0 ? 0 : Ui.dp(10)));
+        }
+
+        // espace bureau (le site décide qui y a droit)
+        JSONObject role = DEM == null ? null : DEM.optJSONObject("role");
+        if (role != null && role.optBoolean("bureau")) {
+            JSONArray b = DEM.optJSONArray("bureau");
+            int aTraiter = 0;
+            for (int i = 0; b != null && i < b.length(); i++) {
+                String s = b.optJSONObject(i).optString("statut");
+                if ("En attente".equals(s) || "En cours".equals(s)) aTraiter++;
+            }
+            section(corps, "Espace bureau · " + aTraiter + " à traiter");
+            LinearLayout info = Ui.carte(this);
+            info.setBackground(Ui.arrondi(Ui.VERT_PALE, Ui.dp(16)));
+            info.addView(Ui.texte(this, "Vous voyez les démarches des membres en tant que " + role.optString("fonction", "membre du bureau")
+                    + ". " + (role.optBoolean("tresorier")
+                    ? "Un paiement validé ici doit être saisi dans AMEDIS pro Asso sur le PC : c'est cette saisie qui crée le reçu et met la caisse à jour."
+                    : "Les paiements sont validés par le trésorier seul."), 13, Ui.TEXTE, false));
+            corps.addView(info);
+            for (int i = 0; b != null && i < b.length(); i++)
+                corps.addView(carteDemarche(b.optJSONObject(i), true, role.optBoolean("tresorier")), Ui.large(Ui.dp(10)));
+        }
+
+        TextView regles = Ui.texte(this, "Règles : un paiement déclaré n'est compté qu'après validation du trésorier et émission du reçu. "
+                + "Vous ne voyez que vos propres démarches. Limites : 15 démarches par jour, 3 paiements en attente au plus.",
+                12, Ui.DOUX, false);
+        regles.setGravity(Gravity.CENTER);
+        regles.setPadding(Ui.dp(8), Ui.dp(22), Ui.dp(8), 0);
+        corps.addView(regles);
+    }
+
+    private View tuileAction(int icone, String titre, String sous, View.OnClickListener action) {
+        LinearLayout c = Ui.carte(this);
+        c.setPadding(Ui.dp(12), Ui.dp(14), Ui.dp(12), Ui.dp(14));
+        c.addView(rondIcone(icone, Ui.VERT_PALE, Ui.VERT_TEXTE, Ui.dp(38)));
+        TextView t = Ui.texte(this, titre, 14.5f, Ui.TEXTE, true);
+        t.setPadding(0, Ui.dp(8), 0, 0);
+        c.addView(t);
+        c.addView(Ui.texte(this, sous, 12, Ui.DOUX, false));
+        c.setClickable(true);
+        c.setOnClickListener(action);
+        return c;
+    }
+
+    private View carteDemarche(final JSONObject d, boolean vueBureau, boolean tresorier) {
+        LinearLayout c = Ui.carte(this);
+        if (d == null) return c;
+        String statut = d.optString("statut", "En attente");
+        LinearLayout l = Ui.ligne(this);
+        l.addView(Ui.texte(this, d.optString("libelle"), 15, Ui.TEXTE, true), Ui.poids(1));
+        int fond = Ui.OR_PALE, encre = Ui.ORANGE;
+        if ("Validée".equals(statut) || "Répondu".equals(statut)) { fond = Ui.VERT_PALE; encre = Ui.VERT_TEXTE; }
+        else if ("Refusée".equals(statut) || "Annulée".equals(statut)) { fond = Ui.ROUGE_PALE; encre = Ui.ROUGE; }
+        l.addView(Ui.puce(this, statut, fond, encre));
+        c.addView(l);
+        String qui = vueBureau ? d.optString("membre") + " (n° " + d.optString("numero") + ") · " : "";
+        c.addView(Ui.texte(this, qui + "envoyée le " + Ui.moment(d.optString("recueLe")), 12.5f, Ui.DOUX, false), Ui.large(Ui.dp(2)));
+        if ("paiement".equals(d.optString("type"))) {
+            c.addView(Ui.texte(this, Ui.argent(d.optDouble("montant", 0), monnaie()) + " · " + d.optString("cotisation"), 15, Ui.VERT_TEXTE, true), Ui.large(Ui.dp(8)));
+            String det = d.optString("modePaiement") + (d.optString("reference").isEmpty() ? "" : " · réf. " + d.optString("reference"))
+                    + (d.optString("datePaiement").isEmpty() ? "" : " · le " + Ui.date(d.optString("datePaiement")));
+            c.addView(Ui.texte(this, det, 13, Ui.TEXTE, false));
+        }
+        if (!d.optString("detail").isEmpty()) c.addView(Ui.texte(this, d.optString("detail"), 13.5f, Ui.TEXTE, false), Ui.large(Ui.dp(6)));
+        if (!d.optString("reponse").isEmpty()) {
+            LinearLayout rep = Ui.colonne(this);
+            rep.setPadding(Ui.dp(12), Ui.dp(10), Ui.dp(12), Ui.dp(10));
+            rep.setBackground(Ui.arrondi(Ui.PISTE, Ui.dp(10)));
+            rep.addView(Ui.etiquette(this, "Réponse · " + d.optString("traiteePar")));
+            rep.addView(Ui.texte(this, d.optString("reponse"), 13.5f, Ui.TEXTE, false));
+            c.addView(rep, Ui.large(Ui.dp(10)));
+        }
+        final String id = d.optString("id");
+        boolean ouverte = "En attente".equals(statut) || "En cours".equals(statut);
+        if (!vueBureau && "En attente".equals(statut)) {
+            c.addView(bouton("Annuler cette démarche", false, v -> confirmer("Annuler cette démarche ?",
+                    "Le bureau ne la traitera pas.", () -> actionDemarche(() -> demarches.annuler(id), "Démarche annulée."))), Ui.large(Ui.dp(12)));
+        }
+        if (vueBureau && ouverte) {
+            boolean paiement = "paiement".equals(d.optString("type"));
+            LinearLayout b = Ui.ligne(this);
+            if (!paiement || tresorier) {
+                if ("En attente".equals(statut)) {
+                    b.addView(bouton("Prendre en charge", false, v -> actionDemarche(() -> demarches.statuer(id, "En cours", ""), "Démarche prise en charge.")), Ui.poids(1));
+                    b.addView(Ui.espace(this, Ui.dp(8)));
+                }
+                b.addView(bouton(paiement ? "Valider" : "Répondre", true, v -> repondre(id, paiement ? "Validée" : "Répondu", paiement)), Ui.poids(1));
+                b.addView(Ui.espace(this, Ui.dp(8)));
+                b.addView(bouton("Refuser", false, v -> repondre(id, "Refusée", paiement)), Ui.poids(1));
+                c.addView(b, Ui.large(Ui.dp(12)));
+            } else {
+                c.addView(Ui.texte(this, "À valider par le trésorier.", 12.5f, Ui.DOUX, false), Ui.large(Ui.dp(8)));
+            }
+        }
+        return c;
+    }
+
+    private interface Appel { JSONObject faire() throws Exception; }
+
+    private void actionDemarche(final Appel a, final String succes) {
+        enChargement(true);
+        fond.execute(() -> {
+            String err;
+            try {
+                JSONObject r = a.faire();
+                err = r.optBoolean("ok") ? null : r.optString("erreur", "Opération refusée.");
+                if (err == null) DEM = demarches.liste();
+            } catch (Donnees.SiteAncien e) {
+                err = "Le site de l'association doit être mis à jour (version 1.8.0) pour les démarches.";
+            } catch (Exception e) {
+                err = "Pas de connexion Internet : réessayez plus tard.";
+            }
+            final String fe = err;
+            ui.post(() -> {
+                enChargement(false);
+                message(fe == null ? succes : fe);
+                afficher();
+            });
+        });
+    }
+
+    private void repondre(final String id, final String statut, boolean paiement) {
+        final EditText t = new EditText(this);
+        t.setHint("Refusée".equals(statut) ? "Motif du refus (obligatoire)" : "Réponse au membre (facultatif)");
+        t.setMinLines(2);
+        String msg = "Validée".equals(statut)
+                ? "Après validation, enregistrez ce paiement dans AMEDIS pro Asso sur le PC : le reçu sera publié automatiquement au membre."
+                : "Refusée".equals(statut) ? "Le membre verra le motif dans son appli." : "Le membre verra votre réponse dans son appli.";
+        new AlertDialog.Builder(this).setTitle(paiement && "Validée".equals(statut) ? "Valider le paiement" : statut)
+                .setMessage(msg).setView(encadrer(t))
+                .setPositiveButton("Confirmer", (dlg, w) -> actionDemarche(() -> demarches.statuer(id, statut, t.getText().toString().trim()), "Réponse enregistrée."))
+                .setNegativeButton("Annuler", null).show();
+    }
+
+    private void confirmer(String titre, String texte, final Runnable oui) {
+        new AlertDialog.Builder(this).setTitle(titre).setMessage(texte)
+                .setPositiveButton("Oui", (d, w) -> oui.run()).setNegativeButton("Non", null).show();
+    }
+
+    private Spinner liste(String[] choix) {
+        Spinner s = new Spinner(this);
+        ArrayAdapter<String> a = new ArrayAdapter<>(this, android.R.layout.simple_spinner_item, choix);
+        a.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item);
+        s.setAdapter(a);
+        return s;
+    }
+
+    private void formulairePaiement() {
+        JSONArray cots = M == null ? null : M.optJSONArray("cotisations");
+        java.util.ArrayList<String> noms = new java.util.ArrayList<>();
+        for (int i = 0; cots != null && i < cots.length(); i++) {
+            String nm = cots.optJSONObject(i) == null ? "" : cots.optJSONObject(i).optString("nom");
+            if (!nm.isEmpty()) noms.add(nm);
+        }
+        if (noms.isEmpty()) noms.add("Cotisation");
+        LinearLayout f = Ui.colonne(this);
+        f.addView(Ui.etiquette(this, "Cotisation"));
+        final Spinner cot = liste(noms.toArray(new String[0]));
+        f.addView(cot);
+        final EditText montant = new EditText(this);
+        montant.setHint("Montant versé (" + monnaie() + ")");
+        montant.setInputType(InputType.TYPE_CLASS_NUMBER);
+        f.addView(montant, Ui.large(Ui.dp(8)));
+        f.addView(Ui.etiquette(this, "Mode de paiement"), Ui.large(Ui.dp(8)));
+        final Spinner mode = liste(MODES_PAIEMENT);
+        f.addView(mode);
+        final EditText ref = new EditText(this);
+        ref.setHint("Référence de la transaction (facultatif)");
+        f.addView(ref, Ui.large(Ui.dp(8)));
+        final EditText date = new EditText(this);
+        date.setHint("Date du paiement (JJ/MM/AAAA)");
+        date.setInputType(InputType.TYPE_CLASS_DATETIME | InputType.TYPE_DATETIME_VARIATION_DATE);
+        date.setText(new java.text.SimpleDateFormat("dd/MM/yyyy", Locale.FRANCE).format(new java.util.Date()));
+        f.addView(date);
+        final EditText note = new EditText(this);
+        note.setHint("Précision pour le trésorier (facultatif)");
+        f.addView(note);
+        ScrollView sv = new ScrollView(this);
+        sv.addView(encadrer(f));
+        new AlertDialog.Builder(this).setTitle("Déclarer un paiement")
+                .setMessage("Le trésorier vérifie puis enregistre votre paiement. Votre situation et votre reçu sont mis à jour après sa validation.")
+                .setView(sv)
+                .setPositiveButton("Envoyer", (dlg, w) -> {
+                    long mt;
+                    try { mt = Long.parseLong(montant.getText().toString().replaceAll("\\D", "")); } catch (Exception e) { mt = 0; }
+                    if (mt <= 0) { message("Indiquez le montant versé."); return; }
+                    JSONObject d = Demarches.nouvelle("paiement");
+                    try {
+                        d.put("cotisation", cot.getSelectedItem().toString());
+                        d.put("montant", mt);
+                        d.put("modePaiement", mode.getSelectedItem().toString());
+                        d.put("reference", ref.getText().toString().trim());
+                        d.put("datePaiement", dateIso(date.getText().toString().trim()));
+                        d.put("detail", note.getText().toString().trim());
+                    } catch (Exception ignore) { /* champs simples */ }
+                    envoyerDemarche(d);
+                })
+                .setNegativeButton("Annuler", null).show();
+    }
+
+    private void formulaireTexte(final String type) {
+        String titre, aide, indice;
+        switch (type) {
+            case "coordonnees":
+                titre = "Mettre à jour mes coordonnées";
+                aide = "Indiquez les informations à corriger (téléphone, quartier, adresse…). Le bureau les reportera dans le logiciel.";
+                indice = "Ex. : nouveau numéro 07 00 00 00 00";
+                break;
+            case "solidarite":
+                titre = "Signaler un événement";
+                aide = "Décès, naissance, mariage, maladie… Le bureau en sera informé pour organiser la solidarité.";
+                indice = "Ex. : naissance de ma fille le 12/11";
+                break;
+            default:
+                titre = "Écrire au bureau";
+                aide = "Question, suggestion ou réclamation. Le bureau vous répondra ici.";
+                indice = "Votre message";
+                break;
+        }
+        final EditText t = new EditText(this);
+        t.setHint(indice);
+        t.setMinLines(3);
+        t.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_FLAG_MULTI_LINE | InputType.TYPE_TEXT_FLAG_CAP_SENTENCES);
+        new AlertDialog.Builder(this).setTitle(titre).setMessage(aide).setView(encadrer(t))
+                .setPositiveButton("Envoyer", (dlg, w) -> {
+                    String s = t.getText().toString().trim();
+                    if (s.isEmpty()) { message("Écrivez d'abord votre texte."); return; }
+                    JSONObject d = Demarches.nouvelle(type);
+                    try { d.put("detail", s.length() > 600 ? s.substring(0, 600) : s); } catch (Exception ignore) { /* simple */ }
+                    envoyerDemarche(d);
+                })
+                .setNegativeButton("Annuler", null).show();
+    }
+
+    private void envoyerDemarche(final JSONObject d) {
+        enChargement(true);
+        fond.execute(() -> {
+            String msg;
+            try {
+                boolean envoyee = demarches.envoyer(d);
+                if (envoyee) { DEM = demarches.liste(); msg = "Démarche envoyée au bureau."; }
+                else msg = "Pas de connexion : démarche gardée sur le téléphone, envoi automatique plus tard.";
+            } catch (Demarches.Refus e) {
+                msg = e.getMessage();
+            } catch (Donnees.SiteAncien e) {
+                msg = "Le site de l'association doit être mis à jour (version 1.8.0) pour les démarches.";
+            } catch (Exception e) {
+                msg = "Envoi impossible : réessayez plus tard.";
+            }
+            final String fm = msg;
+            ui.post(() -> { enChargement(false); message(fm); afficher(); });
+        });
+    }
+
+    /** Synchronise les démarches en arrière-plan : file hors connexion d'abord, puis suivi. */
+    private void synchroniserDemarches() {
+        if (!demarches.possible()) return;
+        fond.execute(() -> {
+            StringBuilder refus = new StringBuilder();
+            int envoyees = 0;
+            JSONObject r = null;
+            try {
+                envoyees = demarches.viderFile(refus);
+                r = demarches.liste();
+            } catch (Exception ignore) { /* hors connexion ou site ancien : on garde l'affichage */ }
+            final JSONObject fr = r;
+            final int fe = envoyees;
+            ui.post(() -> {
+                if (fr != null) { DEM = fr; signalerReponses(); }
+                if (fe > 0) message(fe + (fe > 1 ? " démarches envoyées." : " démarche envoyée."));
+                if (refus.length() > 0) new AlertDialog.Builder(this).setTitle("Démarche refusée par le site")
+                        .setMessage(refus.toString()).setPositiveButton("Compris", null).show();
+                if (onglet == T_DEMARCHES) afficher();
+            });
+        });
+    }
+
+    /** Message quand le bureau a répondu depuis la dernière ouverture. */
+    private void signalerReponses() {
+        JSONArray m = DEM == null ? null : DEM.optJSONArray("miennes");
+        int traitees = 0;
+        for (int i = 0; m != null && i < m.length(); i++) {
+            String s = m.optJSONObject(i).optString("statut");
+            if (!"En attente".equals(s) && !"Annulée".equals(s)) traitees++;
+        }
+        android.content.SharedPreferences p = getSharedPreferences("amedis", MODE_PRIVATE);
+        int vues = p.getInt("demVues", -1);
+        if (vues >= 0 && traitees > vues) {
+            pastilleDem.setVisibility(View.VISIBLE);
+            message("Le bureau a répondu à une de vos démarches.");
+        }
+        if (vues < 0 || onglet == T_DEMARCHES) p.edit().putInt("demVues", traitees).apply();
+    }
+
+    /** « 12/11/2026 » -> « 2026-11-12 » (texte laissé tel quel s'il n'est pas reconnu). */
+    private static String dateIso(String s) {
+        java.util.regex.Matcher m = java.util.regex.Pattern.compile("^(\\d{1,2})[/.-](\\d{1,2})[/.-](\\d{4})$").matcher(s);
+        if (!m.find()) return s;
+        return m.group(3) + "-" + String.format(Locale.ROOT, "%02d", Integer.parseInt(m.group(2)))
+                + "-" + String.format(Locale.ROOT, "%02d", Integer.parseInt(m.group(1)));
+    }
+
     // ================================================================== ÉCRAN DE BIENVENUE
     private void montrerBienvenue() {
         retirer(bienvenue);
@@ -851,6 +1228,7 @@ public class MainActivity extends Activity {
         atouts.setPadding(0, Ui.dp(26), 0, Ui.dp(10));
         atout(atouts, Icone.OK, "Mes cotisations", "Ce que vous avez versé, ce qu'il reste, mois par mois.");
         atout(atouts, Icone.RECU, "Mes reçus", "Tous vos reçus de paiement, toujours à portée de main.");
+        atout(atouts, Icone.MESSAGE, "Mes démarches", "Déclarer un paiement, écrire au bureau, suivre la réponse.");
         atout(atouts, Icone.CARTE, "Ma carte de membre", "Une carte numérique avec son code QR, à présenter.");
         atout(atouts, Icone.TEL, "Urgence", "Président, secrétaire général et trésorier en un toucher.");
         atout(atouts, Icone.NUAGE, "Même sans Internet", "Les dernières informations restent consultables.");
@@ -866,7 +1244,7 @@ public class MainActivity extends Activity {
 
         View ressort = new View(this);
         col.addView(ressort, new LinearLayout.LayoutParams(1, 0, 1f));
-        TextView cr = Ui.texte(this, "Consultation seulement : rien ne peut être modifié depuis l'appli.\n"
+        TextView cr = Ui.texte(this, "Vos cotisations et reçus ne sont jamais modifiés depuis l'appli.\n"
                 + "Conception : M. KAMAGATE, Inspecteur d'Orientation, CIO Bouaké 2.", 12, 0xFFA9CDB9, false);
         cr.setGravity(Gravity.CENTER);
         cr.setPadding(0, Ui.dp(26), 0, 0);
@@ -1057,6 +1435,7 @@ public class MainActivity extends Activity {
                     donnees.enregistrerJetonCarte(fm.optString("jetonCarte", null));
                     donnees.memoriser(M, AS);
                     nouveauxRecus();
+                    synchroniserDemarches();
                     if (manuel) message("Informations à jour.");
                 } else if (fm != null) {
                     horsLigne = false;
@@ -1242,7 +1621,7 @@ public class MainActivity extends Activity {
         oubli.setOnClickListener(v -> new AlertDialog.Builder(this).setTitle("Code oublié")
                 .setMessage("Pour retrouver l'accès, les informations enregistrées sur ce téléphone seront effacées. "
                         + "Vous scannerez ensuite de nouveau votre code QR.")
-                .setPositiveButton("Effacer et recommencer", (d, w) -> { donnees.toutEffacer(); deverrouiller(); M = null; AS = null; montrerBienvenue(); })
+                .setPositiveButton("Effacer et recommencer", (d, w) -> { donnees.toutEffacer(); demarches.oublier(); DEM = null; deverrouiller(); M = null; AS = null; montrerBienvenue(); })
                 .setNegativeButton("Annuler", null).show());
         col.addView(oubli);
         verrou = col;
@@ -1261,6 +1640,8 @@ public class MainActivity extends Activity {
                         + "Vous pourrez ensuite scanner un nouveau code QR.")
                 .setPositiveButton("Effacer", (d, w) -> {
                     donnees.toutEffacer();
+                    demarches.oublier();
+                    DEM = null;
                     getSharedPreferences("amedis", MODE_PRIVATE).edit().remove("recusVus").apply();
                     CookieManager.getInstance().removeAllCookies(null);
                     M = null;

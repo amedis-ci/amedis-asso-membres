@@ -107,7 +107,7 @@ final class Donnees {
     }
 
     /** POST vers /exec ; Google répond par une redirection vers le résultat, suivie à la main. */
-    private JSONObject appel(String corps) throws Exception {
+    JSONObject appel(String corps) throws Exception {
         String base = base();
         if (base == null) throw new IOException("aucun site");
         HttpURLConnection c = (HttpURLConnection) new URL(base).openConnection();
