@@ -1,0 +1,78 @@
+name: Fabriquer l'APK pro
+
+# AMEDIS pro Asso Mobile : le logiciel complet de gestion d'association, sans ordinateur.
+# Publié sous l'étiquette pro-v…, sans devenir « la dernière version » (l'appli des membres n'est pas touchée).
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Numéro de la version (ex. 1.0.0, puis 1.0.1, 1.1.0…)"
+        required: true
+        default: "1.0.0"
+      notes:
+        description: "Nouveautés de cette version"
+        required: false
+        default: "Première version d'AMEDIS pro Asso Mobile."
+
+permissions:
+  contents: write
+
+jobs:
+  apk:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Récupérer le projet
+        uses: actions/checkout@v4
+
+      - name: Installer Java 17
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Installer Gradle
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: "8.7"
+
+      - name: Préparer et vérifier la clé de signature
+        env:
+          KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
+          KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
+        run: |
+          if [ -z "$KEYSTORE_BASE64" ] || [ -z "$KEYSTORE_PASSWORD" ]; then
+            echo "::error::Secret manquant : il faut KEYSTORE_BASE64 et KEYSTORE_PASSWORD (Settings > Secrets and variables > Actions)."
+            exit 1
+          fi
+          printf '%s' "$KEYSTORE_BASE64" | tr -cd 'A-Za-z0-9+/=' | base64 -d > "$RUNNER_TEMP/cle_android.jks" 2>/dev/null || true
+          if ! keytool -list -keystore "$RUNNER_TEMP/cle_android.jks" -storepass "$KEYSTORE_PASSWORD" > /dev/null 2>&1; then
+            echo "::error::Clé de signature illisible."
+            exit 1
+          fi
+          echo "KEYSTORE_FILE=$RUNNER_TEMP/cle_android.jks" >> "$GITHUB_ENV"
+
+      - name: Fabriquer l'APK pro
+        env:
+          AVEC_MOBILE: "1"
+          APP_VERSION: ${{ inputs.version }}
+          KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
+        run: gradle :mobile:assembleRelease --no-daemon --stacktrace
+
+      - name: Nommer l'APK
+        run: cp mobile/build/outputs/apk/release/mobile-release.apk "AMEDIS_pro_Asso_Mobile_${{ inputs.version }}.apk"
+
+      - name: Publier la version
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: pro-v${{ inputs.version }}
+          name: AMEDIS pro Asso Mobile ${{ inputs.version }}
+          body: ${{ inputs.notes }}
+          files: AMEDIS_pro_Asso_Mobile_${{ inputs.version }}.apk
+          make_latest: false
+
+      - name: Conserver aussi l'APK dans les résultats
+        uses: actions/upload-artifact@v4
+        with:
+          name: AMEDIS_pro_Asso_Mobile_${{ inputs.version }}
+          path: AMEDIS_pro_Asso_Mobile_${{ inputs.version }}.apk
