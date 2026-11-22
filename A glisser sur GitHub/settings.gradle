@@ -1,0 +1,11 @@
+pluginManagement {
+    repositories { google(); mavenCentral(); gradlePluginPortal() }
+}
+dependencyResolutionManagement {
+    repositoriesMode.set(RepositoriesMode.FAIL_ON_PROJECT_REPOS)
+    repositories { google(); mavenCentral() }
+}
+rootProject.name = 'AMEDISAssoMembres'
+include ':app'
+// AMEDIS pro Asso Mobile (logiciel complet) : fabriqué seulement par la recette « Fabriquer l'APK pro »
+if (System.getenv('AVEC_MOBILE') == '1') include ':mobile'

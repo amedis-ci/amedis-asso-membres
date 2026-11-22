@@ -1,0 +1,90 @@
+/* AMEDIS pro Asso Mobile — affichage téléphone et tablette (le même logiciel que sur PC) */
+html.android, html.android body { -webkit-tap-highlight-color: transparent; overscroll-behavior: none; }
+html.android .app { height: 100dvh; }
+html.android button, html.android .btn, html.android #nav a { touch-action: manipulation; }
+/* les raccourcis clavier n'ont pas de sens au doigt */
+html.android #btn-raccourcis, html.android #btn-palette kbd { display: none !important; }
+.btn-menu { display: none; border: 0; background: transparent; width: 42px; height: 42px; margin: -6px 6px -6px -8px; border-radius: 10px; cursor: pointer; color: var(--texte, #1d2b36); flex: none; }
+.btn-menu svg { width: 26px; height: 26px; }
+.voile-menu { display: none; }
+
+/* ---------------- tablette en largeur (900 à 1250 px) : menu plus étroit */
+@media (max-width: 1250px) and (min-width: 901px) {
+  .barre { width: 200px; }
+  .kpis, .kpis.k5 { grid-template-columns: repeat(3, 1fr); }
+  .vue { padding: 18px 18px 40px; }
+  .entete { padding: 12px 18px; }
+  .ecran-duo { grid-template-columns: 1fr 1fr; }
+}
+
+/* ---------------- téléphone et tablette en hauteur (jusqu'à 900 px) : menu repliable */
+@media (max-width: 900px) {
+  .btn-menu { display: inline-flex; align-items: center; justify-content: center; }
+  .barre { position: fixed; left: 0; top: 0; bottom: 0; width: min(84vw, 300px); z-index: 60; transform: translateX(-105%); transition: transform .22s ease; box-shadow: 8px 0 30px rgba(0,0,0,.25); overflow-y: auto; }
+  body.menu-ouvert .barre { transform: none; }
+  body.menu-ouvert .voile-menu { display: block; position: fixed; inset: 0; background: rgba(10,20,30,.45); z-index: 55; }
+  .barre nav { overflow-y: visible; }
+  .entete { padding: 10px 12px; gap: 8px; flex-wrap: wrap; position: sticky; top: 0; z-index: 20; }
+  .entete-gauche { display: flex; align-items: center; min-width: 0; flex: 1; }
+  .entete-gauche > div:not(.btn-menu) { min-width: 0; }
+  .entete h2 { font-size: 17px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .sous-titre { font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .entete > div:last-child { width: 100%; justify-content: space-between; flex-wrap: wrap; }
+  .entete-actions { justify-content: flex-start; }
+  .entete-actions .btn { padding: 7px 10px; font-size: 13px; }
+  .vue { padding: 12px 10px 90px; -webkit-overflow-scrolling: touch; }
+  /* grilles : une ou deux colonnes */
+  .kpis, .kpis.k5 { grid-template-columns: repeat(2, 1fr); gap: 10px; }
+  .g2, .g3, .docs, .form-grille, .fiche-id, .saisie, .form-membre, .panneaux-cot, .qr-grille, .atouts, .choix-series { grid-template-columns: 1fr !important; }
+  .form-grille .large, .form-grille .plein { grid-column: auto; }
+  .caisses-grille { grid-template-columns: repeat(2, 1fr); }
+  .barres-mois { gap: 3px; }
+  .barre-outils { gap: 8px; }
+  .barre-outils .recherche, .barre-outils input.entree { width: 100% !important; flex: 1 1 100%; }
+  /* tableaux : défilement horizontal au doigt, sans casser la page */
+  table.tab { display: block; overflow-x: auto; white-space: nowrap; -webkit-overflow-scrolling: touch; max-width: 100%; }
+  .carte { padding: 14px 12px; }
+  .grille-cot input { width: 64px; }
+  /* fenêtres : plein écran */
+  .modale-fond { padding: 0; align-items: stretch; }
+  .modale, .modale.large { width: 100%; max-width: 100%; max-height: 100dvh; height: 100dvh; border-radius: 0; }
+  .modale-entete { padding: 14px 14px; }
+  .modale-corps { padding: 14px 12px; flex: 1; }
+  .modale-pied { padding: 10px 12px calc(10px + env(safe-area-inset-bottom)); flex-wrap: wrap; }
+  .modale-pied .btn { flex: 1 1 auto; }
+  /* accueil et connexion : la vitrine passe au-dessus, réduite */
+  .ecran-duo { grid-template-columns: 1fr !important; min-height: 100dvh; }
+  .ecran-duo .vitrine { padding: 18px 16px 14px; max-height: none; }
+  .ecran-duo .vitrine > *:not(.vitrine-haut):not(.vitrine-titre) { display: none; }
+  .vitrine-titre { font-size: 20px; }
+  .ecran-duo .cote-carte { padding: 12px 10px 30px !important; }
+  .ecran-duo .accueil-carte { padding: 18px 14px !important; border-radius: 16px; }
+  .accueil-actions { flex-direction: column; }
+  .accueil-actions .btn { width: 100%; }
+  .toasts { left: 10px; right: 10px; bottom: 14px; }
+  .toasts > * { max-width: none; }
+}
+@media (max-width: 900px) {
+  html.android #btn-palette kbd { display: none; }
+  /* bandeau du tableau de bord : salutation puis état, l'un sous l'autre */
+  .bandeau-accueil { display: flex !important; flex-wrap: wrap; gap: 12px; padding: 16px !important; }
+  .bandeau-accueil > div:nth-child(2) { flex: 1; min-width: 0; }
+  .bandeau-accueil h2 { font-size: 20px !important; }
+  .bandeau-accueil .bandeau-etat { flex: 1 1 100%; max-width: none !important; }
+  /* encaissement : chaque ligne (cotisation, période, montant) en carte */
+  .modale tr.enc-l { display: grid; grid-template-columns: 1fr 1fr auto; gap: 6px; padding: 8px 0; border-bottom: 1px solid var(--bord); }
+  .modale tr.enc-l td { padding: 0 !important; border: 0 !important; }
+  .modale tr.enc-l td:first-child { grid-column: 1 / -1; }
+  .modale tr.enc-l td.enc-reste { grid-column: 1 / -1; order: 9; }
+  .modale tr.enc-l .entree { width: 100% !important; }
+  .modale table:has(tr.enc-l) th { display: none; }
+  .modale table:has(tr.enc-l) { display: block; white-space: normal; }
+}
+@media (max-width: 600px) {
+  .sous-titre { display: none; }
+  .entete h2 { font-size: 18px; }
+}
+@media (max-width: 420px) {
+  .kpis, .kpis.k5, .caisses-grille { grid-template-columns: 1fr 1fr; }
+  .entete-actions .btn { font-size: 12.5px; padding: 6px 8px; }
+}

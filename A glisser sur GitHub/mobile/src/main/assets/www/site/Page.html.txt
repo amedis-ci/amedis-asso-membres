@@ -1,0 +1,265 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<base target="_top">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<style>
+  :root { --vert: #0f6b45; --vert-f: #0a4d31; --or: #d9a400; --fond: #f2f5f3; --carte: #fff; --texte: #1d2a24; --gris: #66756d; --bord: #dfe6e2; --rouge: #c0392b; --ok: #1e8e4e; --h: #2563a8; --f: #be185d; }
+  * { box-sizing: border-box; }
+  body { margin: 0; font: 15px/1.45 system-ui, -apple-system, "Segoe UI", Roboto, Arial, sans-serif; background: var(--fond); color: var(--texte); }
+  header { background: linear-gradient(135deg, var(--vert-f), var(--vert)); color: #fff; padding: 16px 16px 14px; }
+  .h-ligne { display: flex; gap: 12px; align-items: center; }
+  .logo { width: 46px; height: 46px; border-radius: 10px; background: #fff center/cover no-repeat; flex: none; display: flex; align-items: center; justify-content: center; color: var(--vert); font-weight: 800; font-size: 20px; }
+  header h1 { margin: 0; font-size: 17px; line-height: 1.25; letter-spacing: .2px; }
+  header .sous { opacity: .85; font-size: 12.5px; margin-top: 2px; }
+  .lecture { display: inline-block; margin-top: 8px; font-size: 11.5px; background: rgba(255,255,255,.16); border-radius: 20px; padding: 3px 10px; }
+  main { max-width: 860px; margin: 0 auto; padding: 14px 12px 40px; }
+  .carte { background: var(--carte); border: 1px solid var(--bord); border-radius: 14px; padding: 16px; margin-bottom: 14px; box-shadow: 0 1px 2px rgba(0,0,0,.03); }
+  .carte h2 { font-size: 15px; margin: 0 0 10px; }
+  .carte h2 small { font-weight: 400; color: var(--gris); font-size: 12px; }
+  label { display: block; font-size: 12.5px; color: var(--gris); margin: 10px 0 4px; }
+  input, select { width: 100%; padding: 12px; border: 1px solid #c9d4ce; border-radius: 10px; font-size: 16px; background: #fff; color: var(--texte); }
+  input:focus, select:focus { outline: 2px solid rgba(15,107,69,.25); border-color: var(--vert); }
+  button { font: inherit; cursor: pointer; }
+  .btn { width: 100%; margin-top: 14px; padding: 13px; border: 0; border-radius: 10px; background: var(--vert); color: #fff; font-weight: 700; font-size: 15px; }
+  .btn:disabled { opacity: .6; }
+  .btn-lien { background: none; border: 0; color: var(--vert); padding: 6px 0; font-size: 13px; text-decoration: underline; }
+  .erreur { background: #fdecea; color: #8c2318; border-radius: 10px; padding: 10px 12px; margin-top: 12px; font-size: 13.5px; }
+  .aide { color: var(--gris); font-size: 12.5px; }
+  .onglets { display: flex; gap: 6px; overflow-x: auto; padding: 2px 0 10px; margin: 0 -2px 4px; scrollbar-width: none; }
+  .onglets button { flex: none; border: 1px solid var(--bord); background: #fff; border-radius: 20px; padding: 8px 14px; font-size: 13.5px; color: var(--texte); }
+  .onglets button.actif { background: var(--vert); border-color: var(--vert); color: #fff; font-weight: 600; }
+  .kpis { display: grid; grid-template-columns: repeat(2, 1fr); gap: 10px; margin-bottom: 14px; }
+  @media (min-width: 640px) { .kpis { grid-template-columns: repeat(4, 1fr); } }
+  .kpi { background: #fff; border: 1px solid var(--bord); border-radius: 12px; padding: 12px; border-top: 3px solid var(--vert); }
+  .kpi small { display: block; color: var(--gris); font-size: 11.5px; text-transform: uppercase; letter-spacing: .3px; }
+  .kpi b { display: block; font-size: 19px; margin-top: 2px; white-space: nowrap; }
+  .kpi span { font-size: 11.5px; color: var(--gris); }
+  .kpi.rouge { border-top-color: var(--rouge); } .kpi.or { border-top-color: var(--or); } .kpi.bleu { border-top-color: var(--h); }
+  .ident { display: flex; gap: 14px; align-items: center; }
+  .photo { width: 84px; height: 84px; border-radius: 50%; background: #e6ece9 center/cover no-repeat; flex: none; display: flex; align-items: center; justify-content: center; font-size: 28px; font-weight: 700; color: var(--vert); border: 3px solid #fff; box-shadow: 0 0 0 1px var(--bord); }
+  .ident h2 { margin: 0; font-size: 18px; }
+  .infos { display: grid; grid-template-columns: 1fr 1fr; gap: 8px 14px; margin-top: 14px; font-size: 13.5px; }
+  .infos div small { display: block; color: var(--gris); font-size: 11.5px; }
+  table { width: 100%; border-collapse: collapse; font-size: 13.5px; }
+  th { text-align: left; font-size: 11.5px; color: var(--gris); font-weight: 600; text-transform: uppercase; letter-spacing: .2px; padding: 7px 6px; border-bottom: 1px solid var(--bord); white-space: nowrap; }
+  td { padding: 8px 6px; border-bottom: 1px solid #eef2f0; vertical-align: top; }
+  tr.total td { font-weight: 700; border-top: 2px solid var(--bord); }
+  .num { text-align: right; white-space: nowrap; }
+  .defile { overflow-x: auto; -webkit-overflow-scrolling: touch; }
+  .badge { display: inline-block; border-radius: 20px; padding: 2px 9px; font-size: 11.5px; font-weight: 600; white-space: nowrap; }
+  .b-ok { background: #e3f4ea; color: var(--ok); } .b-non { background: #fdecea; color: var(--rouge); } .b-nc { background: #eef1f0; color: var(--gris); }
+  .g { display: inline-flex; width: 20px; height: 20px; border-radius: 50%; color: #fff; font-size: 11px; font-weight: 700; align-items: center; justify-content: center; }
+  .g-H { background: var(--h); } .g-F { background: var(--f); } .g-N { background: #9aa3ad; }
+  .cot { border-left: 4px solid var(--vert); padding-left: 12px; margin: 14px 0; }
+  .cot h3 { margin: 0 0 6px; font-size: 14.5px; }
+  .barre { height: 8px; border-radius: 6px; background: #e8eeeb; overflow: hidden; margin: 8px 0 4px; }
+  .barre div { height: 100%; background: var(--vert); }
+  .mois { display: grid; grid-template-columns: repeat(auto-fill, minmax(92px, 1fr)); gap: 6px; margin-top: 8px; }
+  .mois div { border: 1px solid var(--bord); border-radius: 8px; padding: 6px 8px; font-size: 12px; }
+  .mois div b { display: block; font-size: 13px; }
+  .mois div.vide { color: #a5b0aa; background: #fafbfa; }
+  .rech { margin-bottom: 10px; }
+  .ligne-m { display: flex; gap: 10px; align-items: center; padding: 10px 2px; border-bottom: 1px solid #eef2f0; }
+  .ligne-m .n { flex: 1; min-width: 0; }
+  .ligne-m .n b { display: block; font-size: 14px; }
+  .ligne-m .n small { color: var(--gris); font-size: 12px; }
+  .pied { text-align: center; color: var(--gris); font-size: 11.5px; margin-top: 22px; }
+  .charge { text-align: center; color: var(--gris); padding: 30px 0; }
+  .masque { display: none !important; }
+</style>
+</head>
+<body data-mode="<?= mode ?>" data-jeton="<?= jeton ?>">
+<header>
+  <div class="h-ligne"><div class="logo" id="logo">A</div>
+    <div><h1 id="titre">Consultation des membres</h1><div class="sous" id="sous">AMEDIS pro Asso</div></div></div>
+  <div class="lecture">🔒 Consultation seulement — rien ne peut être modifié ici</div>
+</header>
+<main>
+  <div id="ecran-connexion" class="carte masque">
+    <h2 id="cx-titre">Accès des membres</h2>
+    <div class="aide" id="cx-aide">Saisissez votre identifiant de membre et votre code personnel (4 chiffres, remis par le bureau de l'association).</div>
+    <form id="cx-form" autocomplete="off">
+      <label for="cx-id">Identifiant de membre</label>
+      <input id="cx-id" placeholder="ex. A2B 12" autocapitalize="characters" required>
+      <label for="cx-code">Code personnel</label>
+      <input id="cx-code" inputmode="numeric" pattern="[0-9]*" maxlength="8" placeholder="••••" required>
+      <button class="btn" id="cx-ok" type="submit">Consulter</button>
+    </form>
+    <div id="cx-erreur" class="erreur masque"></div>
+  </div>
+  <div id="ecran-charge" class="charge">Chargement…</div>
+  <div id="ecran-contenu" class="masque">
+    <div class="onglets" id="onglets"></div>
+    <div id="vue"></div>
+    <div class="pied" id="pied"></div>
+  </div>
+</main>
+<script>
+(function () {
+  var MODE = document.body.getAttribute('data-mode') || 'asso', JETON = document.body.getAttribute('data-jeton') || '';
+  var D = null, ONGLET = 'moi', COT = 0;
+  var $ = function (s) { return document.querySelector(s); };
+  var esc = function (s) { return String(s == null ? '' : s).replace(/[&<>"']/g, function (c) { return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]; }); };
+  var dev = function () { return (D && D.asso && D.asso.monnaie) || 'F CFA'; };
+  var mt = function (n) { n = Math.round(Number(n) || 0); return n.toLocaleString('fr-FR').replace(/ | /g, ' '); };
+  var mtd = function (n) { return mt(n) + ' ' + dev(); };
+  var dateFr = function (s) { if (!s) return '–'; var d = new Date(String(s).length <= 10 ? s + 'T12:00' : s); return isNaN(d) ? esc(s) : d.toLocaleDateString('fr-FR'); };
+  var dateHeure = function (s) { var d = new Date(s); return isNaN(d) ? '' : d.toLocaleDateString('fr-FR') + ' à ' + d.toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' }); };
+  var gBadge = function (g) { return '<span class="g g-' + (g || 'N') + '">' + (g || '?') + '</span>'; };
+  var initiales = function (m) { return ((m.nom || '?')[0] + ((m.prenoms || '')[0] || '')).toUpperCase(); };
+  var nomComplet = function (m) { return [m.nom, m.prenoms].filter(Boolean).join(' '); };
+  var badgeSit = function (c) { return !c ? '' : c.nc ? '<span class="badge b-nc">Non concerné</span>' : c.ok ? '<span class="badge b-ok">À jour</span>' : '<span class="badge b-non">Reste ' + mt(c.r) + '</span>'; };
+
+  function entete(asso) {
+    if (!asso) return;
+    $('#titre').textContent = asso.nom || 'Association';
+    $('#sous').textContent = 'Exercice ' + (asso.exercice || '') + (asso.siege ? ' · ' + asso.siege : '');
+    var lg = $('#logo');
+    if (asso.logo) { lg.style.backgroundImage = 'url("' + asso.logo + '")'; lg.textContent = ''; } else lg.textContent = (asso.nom || 'A')[0];
+    document.title = (asso.nom || 'Association') + ' — consultation';
+  }
+  function montrer(id) { ['#ecran-connexion', '#ecran-charge', '#ecran-contenu'].forEach(function (x) { $(x).classList.toggle('masque', x !== id); }); }
+  function appeler(ident, code) {
+    montrer('#ecran-charge');
+    var ok = function (r) {
+      if (!r || !r.ok) { montrer((MODE === 'perso' || MODE === 'carte') ? '#ecran-charge' : '#ecran-connexion'); if (MODE === 'perso' || MODE === 'carte') { $('#ecran-charge').innerHTML = '<div class="erreur">' + esc((r && r.erreur) || 'Erreur.') + '</div>'; } else { $('#cx-erreur').textContent = (r && r.erreur) || 'Erreur.'; $('#cx-erreur').classList.remove('masque'); } return; }
+      D = r; entete(r.asso); ONGLET = 'moi'; dessiner(); montrer('#ecran-contenu');
+    };
+    var ko = function (e) { montrer((MODE === 'perso' || MODE === 'carte') ? '#ecran-charge' : '#ecran-connexion'); var t = 'Le site ne répond pas. Vérifiez votre connexion Internet et réessayez.'; if (MODE === 'perso' || MODE === 'carte') $('#ecran-charge').innerHTML = '<div class="erreur">' + t + '</div>'; else { $('#cx-erreur').textContent = t; $('#cx-erreur').classList.remove('masque'); } };
+    google.script.run.withSuccessHandler(ok).withFailureHandler(ko).consulter(MODE, ident || '', code || '', JETON);
+  }
+
+  // ------------------------------------------------------------ vues
+  var ONGLETS = [['moi', 'Mon dossier'], ['tableau', 'Tableau de bord'], ['membres', 'Membres'], ['cotisations', 'Cotisations'], ['depenses', 'Dépenses'], ['dons', 'Dons'], ['bilan', 'Bilan']];
+  function dessiner() {
+    var ong = D.mode === 'asso' ? ONGLETS : D.mode === 'carte' ? [['moi', 'Carte de membre']] : [['moi', 'Mon dossier']];
+    $('#onglets').innerHTML = ong.length > 1 ? ong.map(function (o) { return '<button data-o="' + o[0] + '" class="' + (o[0] === ONGLET ? 'actif' : '') + '">' + o[1] + '</button>'; }).join('') : '';
+    Array.prototype.forEach.call(document.querySelectorAll('[data-o]'), function (b) { b.onclick = function () { ONGLET = b.getAttribute('data-o'); dessiner(); window.scrollTo(0, 0); }; });
+    $('#vue').innerHTML = D.mode === 'carte' ? vueCarte() : ({ moi: vueMoi, tableau: vueTableau, membres: vueMembres, cotisations: vueCotisations, depenses: vueDepenses, dons: vueDons, bilan: vueBilan })[ONGLET]();
+    var p = $('#pied');
+    p.innerHTML = (D.mode === 'carte' ? 'Carte de membre vérifiée en ligne. Informations à jour au ' + esc(dateHeure(D.publieLe)) + '.' : 'Données publiées le ' + esc(dateHeure(D.publieLe)) + ' par le bureau de l\'association.<br>Consultation seulement : pour toute correction, adressez-vous au trésorier.') +
+      (MODE !== 'perso' && MODE !== 'carte' ? '<br><button class="btn-lien" id="sortir">Quitter (changer de membre)</button>' : '');
+    if ($('#sortir')) $('#sortir').onclick = function () { D = null; $('#cx-code').value = ''; $('#cx-erreur').classList.add('masque'); montrer('#ecran-connexion'); };
+    if (ONGLET === 'membres') brancherMembres();
+    if (ONGLET === 'cotisations') { var s = $('#k-sel'); if (s) s.onchange = function () { COT = +s.value; dessiner(); }; }
+  }
+  /** Carte de membre scannée : identité et numéros d'urgence seulement */
+  function vueCarte() {
+    var m = D.moi, g = m.genre === 'H' ? 'Homme' : m.genre === 'F' ? 'Femme' : '–', u = D.asso.urgence || [];
+    var tel = function (t) { return '<a href="tel:' + esc(String(t).replace(/[^\d+]/g, '')) + '" style="color:inherit;font-weight:700;text-decoration:none">' + esc(t) + '</a>'; };
+    return '<div class="carte"><div class="ident"><div class="photo" style="' + (m.photo ? 'background-image:url(\'' + m.photo + '\')' : '') + '">' + (m.photo ? '' : esc(initiales(m))) + '</div>' +
+      '<div><h2>' + esc(nomComplet(m)) + '</h2><div class="aide">N° membre : <b>' + esc(m.i) + '</b></div>' + (m.actif === false ? '<span class="badge b-nc">Membre inactif</span>' : '<span class="badge b-ok">Membre actif</span>') + '</div></div>' +
+      '<div class="infos"><div><small>Nom</small>' + esc(m.nom) + '</div><div><small>Prénoms</small>' + esc(m.prenoms || '–') + '</div>' +
+      '<div><small>Genre</small>' + g + '</div><div><small>' + esc(D.asso.libelleResidence || 'Résidence') + '</small>' + esc(m.residence || '–') + '</div>' +
+      '<div><small>Contact</small>' + (m.contact ? tel(m.contact) : '–') + '</div><div><small>Fonction</small>' + esc(m.fonction || 'Membre') + '</div>' +
+      '<div><small>Date d\'adhésion</small>' + dateFr(m.dateAdhesion) + '</div><div><small>Exercice</small>' + esc(D.asso.exercice) + '</div></div></div>' +
+      (u.length ? '<div class="carte" style="border-left:4px solid #b42318;background:#fff5f5"><h2 style="color:#b42318">En cas d\'urgence</h2><table>' +
+        u.map(function (x) { return '<tr><td>' + esc(x.role) + (x.nom ? '<br><span class="aide">' + esc(x.nom) + '</span>' : '') + '</td><td class="num">' + tel(x.tel) + '</td></tr>'; }).join('') +
+        '</table><div class="aide">Touchez un numéro pour appeler.</div></div>' : '');
+  }
+  function vueMoi() {
+    var m = D.moi, tot = 0, reste = 0;
+    var cots = D.cotisations.map(function (k, i) {
+      var c = (m.c || [])[i]; if (!c) return '';
+      if (c.nc && !c.t) return '';
+      tot += c.t || 0; reste += c.nc ? 0 : (c.r || 0);
+      var pct = c.a ? Math.min(100, Math.round(100 * c.t / c.a)) : 100;
+      return '<div class="cot" style="border-left-color:' + esc(k.couleur || '#0f6b45') + '"><h3>' + esc(k.nom) + ' ' + badgeSit(c) + '</h3>' +
+        '<table><tr><td>Versé</td><td class="num"><b>' + mtd(c.t) + '</b></td></tr>' + (c.nc ? '' : '<tr><td>Attendu</td><td class="num">' + mtd(c.a) + '</td></tr><tr><td>Reste à payer</td><td class="num">' + (c.r ? '<b style="color:var(--rouge)">' + mtd(c.r) + '</b>' : '–') + '</td></tr>') + '</table>' +
+        (c.nc ? '' : '<div class="barre"><div style="width:' + pct + '%;background:' + esc(k.couleur || '#0f6b45') + '"></div></div>') +
+        '<div class="mois">' + k.colonnes.map(function (col, j) { var v = c.v ? c.v[j] : null; return '<div class="' + (v == null ? 'vide' : '') + '">' + esc(col) + '<b>' + (v == null ? '–' : mt(v)) + '</b></div>'; }).join('') + '</div></div>';
+    }).join('');
+    var g = m.genre === 'H' ? 'Homme' : m.genre === 'F' ? 'Femme' : '–';
+    return '<div class="carte"><div class="ident"><div class="photo" style="' + (m.photo ? 'background-image:url(\'' + m.photo + '\')' : '') + '">' + (m.photo ? '' : esc(initiales(m))) + '</div>' +
+      '<div><h2>' + esc(nomComplet(m)) + '</h2><div class="aide">Identifiant : <b>' + esc(m.i) + '</b></div>' + (m.actif === false ? '<span class="badge b-nc">Membre inactif</span>' : '<span class="badge b-ok">Membre actif</span>') + '</div></div>' +
+      '<div class="infos"><div><small>Nom</small>' + esc(m.nom) + '</div><div><small>Prénoms</small>' + esc(m.prenoms || '–') + '</div>' +
+      '<div><small>Genre</small>' + g + '</div><div><small>' + esc(D.asso.libelleResidence || 'Résidence') + '</small>' + esc(m.residence || '–') + '</div>' +
+      '<div><small>Contact</small>' + esc(m.contact || '–') + '</div><div><small>Fonction</small>' + esc(m.fonction || '–') + '</div>' +
+      '<div><small>Date d\'adhésion</small>' + dateFr(m.dateAdhesion) + '</div><div><small>Exercice</small>' + esc(D.asso.exercice) + '</div></div></div>' +
+      '<div class="kpis"><div class="kpi"><small>Total versé</small><b>' + mt(tot) + '</b><span>' + esc(dev()) + '</span></div><div class="kpi ' + (reste ? 'rouge' : '') + '"><small>Reste à payer</small><b>' + mt(reste) + '</b><span>' + esc(dev()) + '</span></div></div>' +
+      '<div class="carte"><h2>Mes cotisations <small>exercice ' + esc(D.asso.exercice) + '</small></h2>' + (cots || '<div class="aide">Aucune cotisation.</div>') + '</div>' +
+      ((m.rc || []).length ? '<div class="carte"><h2>Mes reçus <small>' + m.rc.length + '</small></h2><table><tr><th>N°</th><th>Date</th><th>Détail</th><th class="num">Montant</th></tr>' +
+        m.rc.slice().reverse().map(function (r) { return '<tr' + (r.x ? ' style="color:#999;text-decoration:line-through"' : '') + '><td style="white-space:nowrap"><b>' + esc(r.n) + '</b></td><td>' + dateFr(r.d) + '</td><td style="font-size:12px">' + r.l.map(esc).join('<br>') + '<br><span class="aide">' + esc(r.m) + (r.x ? ' · ANNULÉ' : '') + '</span></td><td class="num">' + mtd(r.t) + '</td></tr>'; }).join('') + '</table></div>' : '');
+  }
+  function vueTableau() {
+    var t = D.tableau, e = t.effectifs;
+    return '<div class="kpis"><div class="kpi bleu"><small>Membres actifs</small><b>' + e.total + '</b><span>' + e.H + ' hommes · ' + e.F + ' femmes' + (e.N ? ' · ' + e.N + ' sans genre' : '') + '</span></div>' +
+      '<div class="kpi"><small>Cotisations</small><b>' + mt(t.totalCotisations) + '</b><span>' + esc(dev()) + '</span></div>' +
+      '<div class="kpi or"><small>Dons</small><b>' + mt(t.dons) + '</b><span>' + esc(dev()) + '</span></div>' +
+      '<div class="kpi rouge"><small>Dépenses</small><b>' + mt(t.depenses) + '</b><span>' + esc(dev()) + '</span></div></div>' +
+      '<div class="carte"><h2>Solde de l\'association</h2><div style="font-size:24px;font-weight:800;color:' + (t.solde >= 0 ? 'var(--ok)' : 'var(--rouge)') + '">' + mtd(t.solde) + '</div><div class="aide">' + (t.report ? 'dont report de l\'exercice précédent : ' + mtd(t.report) : 'recettes − dépenses') + '</div></div>' +
+      D.cotisations.map(function (k) { var r = k.resume; return '<div class="carte" style="border-top:3px solid ' + esc(k.couleur) + '"><h2>' + esc(k.nom) + ' <small>attendu : ' + esc(k.attendu) + '</small></h2>' +
+        '<table><tr><td>Total collecté</td><td class="num"><b>' + mtd(r.total) + '</b></td></tr><tr><td>Membres à jour</td><td class="num">' + r.aJour + '</td></tr><tr><td>Membres pas à jour</td><td class="num">' + r.pasAJour + '</td></tr><tr><td>Reste à recouvrer</td><td class="num">' + mtd(r.resteTotal) + '</td></tr></table>' +
+        '<div class="barre"><div style="width:' + Math.round(100 * (r.taux || 0)) + '%;background:' + esc(k.couleur) + '"></div></div><div class="aide">' + Math.round(100 * (r.taux || 0)) + ' % des membres à jour</div></div>'; }).join('') +
+      '<div class="carte"><h2>Répartition par genre</h2><table><tr><th>Genre</th><th class="num">Membres</th><th class="num">Cotisations</th></tr>' +
+      '<tr><td>' + gBadge('H') + ' Hommes</td><td class="num">' + e.H + '</td><td class="num">' + mtd(t.cotParGenre.H) + '</td></tr>' +
+      '<tr><td>' + gBadge('F') + ' Femmes</td><td class="num">' + e.F + '</td><td class="num">' + mtd(t.cotParGenre.F) + '</td></tr>' +
+      (e.N || t.cotParGenre.N ? '<tr><td>' + gBadge('') + ' Non renseigné</td><td class="num">' + e.N + '</td><td class="num">' + mtd(t.cotParGenre.N) + '</td></tr>' : '') + '</table></div>';
+  }
+  function vueMembres() {
+    return '<div class="carte"><h2>Membres <small>' + D.membres.length + ' membre(s)</small></h2>' +
+      '<div class="aide" style="margin-bottom:8px">Liste des membres de l\'association. Les contacts et les cotisations de chacun sont confidentiels : vous ne voyez que les vôtres (« Mon dossier »).</div>' +
+      '<div class="rech"><input id="m-rech" placeholder="Rechercher un nom, un identifiant…"></div>' +
+      '<select id="m-filtre" style="margin-bottom:8px"><option value="">Tous</option><option value="H">Hommes</option><option value="F">Femmes</option></select>' +
+      '<div id="m-liste"></div></div>';
+  }
+  function brancherMembres() {
+    var f = function () {
+      var q = ($('#m-rech').value || '').toLowerCase(), g = $('#m-filtre').value;
+      var l = D.membres.filter(function (m) {
+        if ((g === 'H' || g === 'F') && m.genre !== g) return false;
+        return !q || (m.i + ' ' + nomComplet(m) + ' ' + (m.residence || '')).toLowerCase().indexOf(q) >= 0;
+      });
+      $('#m-liste').innerHTML = l.map(function (m) {
+        var moi = D.moi && m.i === D.moi.i;
+        return '<div class="ligne-m">' + gBadge(m.genre) + '<div class="n"><b>' + esc(nomComplet(m)) + (moi ? ' <span class="badge b-ok">vous</span>' : '') + '</b><small>' + esc(m.i) + (m.residence ? ' · ' + esc(m.residence) : '') + (m.fonction ? ' · ' + esc(m.fonction) : '') + (m.actif === false ? ' · inactif' : '') + '</small></div></div>';
+      }).join('') || '<div class="aide">Aucun membre.</div>';
+    };
+    $('#m-rech').oninput = f; $('#m-filtre').onchange = f; f();
+  }
+  function vueCotisations() {
+    var k = D.cotisations[COT] || D.cotisations[0]; if (!k) return '<div class="carte">Aucune cotisation.</div>';
+    var i = D.cotisations.indexOf(k), r = k.resume, c = (D.moi.c || [])[i];
+    return '<div class="carte"><select id="k-sel">' + D.cotisations.map(function (x, j) { return '<option value="' + j + '"' + (j === i ? ' selected' : '') + '>' + esc(x.nom) + '</option>'; }).join('') + '</select>' +
+      '<div class="kpis" style="margin-top:12px"><div class="kpi"><small>Collecté</small><b>' + mt(r.total) + '</b><span>' + esc(dev()) + '</span></div><div class="kpi rouge"><small>Reste à recouvrer</small><b>' + mt(r.resteTotal) + '</b><span>' + esc(dev()) + '</span></div>' +
+      '<div class="kpi"><small>Membres à jour</small><b>' + r.aJour + '</b></div><div class="kpi rouge"><small>Pas à jour</small><b>' + r.pasAJour + '</b></div></div>' +
+      '<div class="aide">Montant attendu : ' + esc(k.attendu) + '. Chiffres de l\'ensemble de l\'association ; le détail par membre est confidentiel.</div></div>' +
+      '<div class="carte"><h2>Collecte par période <small>tous les membres</small></h2><div class="defile"><table><tr><th>Période</th><th class="num">Montant collecté</th></tr>' +
+      k.colonnes.map(function (col, j) { return '<tr><td>' + esc(col) + '</td><td class="num">' + mt((r.parColonne || [])[j]) + '</td></tr>'; }).join('') +
+      '<tr class="total"><td>TOTAL</td><td class="num">' + mt(r.total) + '</td></tr></table></div></div>' +
+      '<div class="carte"><h2>Mes versements <small>' + esc(k.nom) + '</small></h2>' + (!c ? '<div class="aide">–</div>' : c.nc && !c.t ? '<div class="aide">Cette cotisation ne vous concerne pas.</div>' :
+        '<table><tr><td>Versé</td><td class="num"><b>' + mtd(c.t) + '</b></td></tr>' + (c.nc ? '' : '<tr><td>Attendu</td><td class="num">' + mtd(c.a) + '</td></tr><tr><td>Situation</td><td class="num">' + badgeSit(c) + '</td></tr>') + '</table>' +
+        '<div class="mois">' + k.colonnes.map(function (col, j) { var v = c.v ? c.v[j] : null; return '<div class="' + (v == null ? 'vide' : '') + '">' + esc(col) + '<b>' + (v == null ? '–' : mt(v)) + '</b></div>'; }).join('') + '</div>') + '</div>';
+  }
+  function vueOps(liste, dep) {
+    var tot = liste.reduce(function (t, x) { return t + (Number(x.montant) || 0); }, 0);
+    return '<div class="carte"><h2>' + (dep ? 'Dépenses' : 'Dons reçus') + ' <small>' + liste.length + ' opération(s) · total ' + mtd(tot) + '</small></h2><div class="defile"><table><tr><th>N°</th><th>Date</th><th>Désignation</th><th>' + (dep ? 'Catégorie' : 'Donateur') + '</th><th class="num">Montant</th></tr>' +
+      liste.map(function (x) { return '<tr><td>' + esc(x.numero) + '</td><td style="white-space:nowrap">' + dateFr(x.date) + '</td><td>' + esc(x.designation) + '</td><td>' + esc(dep ? x.categorie : x.donateur) + '</td><td class="num">' + mt(x.montant) + '</td></tr>'; }).join('') +
+      '<tr class="total"><td colspan="4">TOTAL</td><td class="num">' + mt(tot) + '</td></tr></table></div></div>';
+  }
+  function vueDepenses() { return vueOps(D.depenses, true); }
+  function vueDons() { return vueOps(D.dons, false); }
+  function vueBilan() {
+    var b = D.bilan;
+    return '<div class="carte"><h2>Recettes</h2><table>' + b.cotisations.map(function (x) { return '<tr><td>' + esc(x.nom) + '</td><td class="num">' + mtd(x.total) + '</td></tr>' + (x.parGenre && !x.reserve && (x.parGenre.H || x.parGenre.F) ? '<tr><td class="aide" style="padding-left:18px">dont hommes</td><td class="num aide">' + mtd(x.parGenre.H) + '</td></tr><tr><td class="aide" style="padding-left:18px">dont femmes</td><td class="num aide">' + mtd(x.parGenre.F) + '</td></tr>' : ''); }).join('') +
+      '<tr><td>Dons reçus</td><td class="num">' + mtd(b.dons) + '</td></tr><tr class="total"><td>TOTAL DES RESSOURCES</td><td class="num">' + mtd(b.recettes) + '</td></tr></table></div>' +
+      '<div class="carte"><h2>Dépenses</h2><table>' + Object.keys(b.parCategorie).map(function (c) { return '<tr><td>' + esc(c) + '</td><td class="num">' + mtd(b.parCategorie[c]) + '</td></tr>'; }).join('') +
+      '<tr class="total"><td>TOTAL DES DÉPENSES</td><td class="num">' + mtd(b.depenses) + '</td></tr></table></div>' +
+      '<div class="carte"><h2>Solde</h2><table>' + (b.report ? '<tr><td>Report de l\'exercice précédent</td><td class="num">' + mtd(b.report) + '</td></tr>' : '') +
+      '<tr><td>Recettes − dépenses</td><td class="num">' + mtd(b.recettes - b.depenses) + '</td></tr><tr class="total"><td>SOLDE</td><td class="num" style="color:' + (b.solde >= 0 ? 'var(--ok)' : 'var(--rouge)') + '">' + mtd(b.solde) + '</td></tr></table></div>' +
+      '<div class="carte"><h2>Mouvements par mois</h2><div class="defile"><table><tr><th>Mois</th><th class="num">Recettes</th><th class="num">Dépenses</th></tr>' +
+      b.parMois.map(function (x) { return '<tr><td>' + esc(x.mois) + '</td><td class="num">' + (x.recettes ? mt(x.recettes) : '') + '</td><td class="num">' + (x.depenses ? mt(x.depenses) : '') + '</td></tr>'; }).join('') +
+      (b.nonReparti && (b.nonReparti.recettes || b.nonReparti.depenses) ? '<tr><td>Non réparti</td><td class="num">' + mt(b.nonReparti.recettes) + '</td><td class="num">' + mt(b.nonReparti.depenses) + '</td></tr>' : '') +
+      '<tr class="total"><td>TOTAL</td><td class="num">' + mt(b.recettes) + '</td><td class="num">' + mt(b.depenses) + '</td></tr></table></div></div>';
+  }
+
+  // ------------------------------------------------------------ démarrage
+  if (MODE === 'membre') { $('#cx-titre').textContent = 'Ma fiche de membre'; $('#cx-aide').textContent = 'Saisissez votre identifiant de membre et votre code personnel pour consulter vos informations et vos cotisations.'; }
+  $('#cx-form').onsubmit = function (e) { e.preventDefault(); $('#cx-erreur').classList.add('masque'); appeler($('#cx-id').value, $('#cx-code').value); };
+  if (MODE === 'perso' || MODE === 'carte') appeler('', ''); else montrer('#ecran-connexion');
+})();
+</script>
+</body>
+</html>

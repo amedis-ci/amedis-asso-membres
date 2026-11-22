@@ -1,0 +1,247 @@
+/**
+ * AMEDIS pro Asso – Site 1.8.0 – Module « Démarches des membres »
+ * Conception : M. KAMAGATE, Inspecteur d'Orientation, CIO Bouaké 2.
+ *
+ * Fichier À AJOUTER au projet Apps Script du site (Fichier > + > Script, nom : Demandes),
+ * à côté de Code.gs (version 1.8.0, qui l'appelle) et de Page.
+ *
+ * RÈGLES (les restrictions ne sont jamais relâchées) :
+ *  1. Le membre s'identifie comme pour la consultation (lien personnel, ou identifiant + code
+ *     personnel avec blocage après 5 essais). La carte de membre seule ne permet AUCUNE démarche.
+ *  2. Un membre ne crée des démarches que pour lui-même et ne voit que les siennes.
+ *  3. Rien ne modifie les cotisations, la caisse ni les reçus : un paiement déclaré reste « en attente »
+ *     jusqu'à sa saisie par le trésorier dans AMEDIS pro Asso sur le PC, seule source de vérité.
+ *  4. Seul le bureau (Président, Secrétaire général, Trésorier, d'après la fonction publiée par le
+ *     logiciel) voit les démarches des autres. Seul le Trésorier statue sur un paiement.
+ *  5. Limites anti-abus : 15 démarches par jour et par membre, 3 paiements en attente au plus,
+ *     montants et textes bornés, doublons ignorés (identifiant envoyé par l'appli).
+ */
+
+var DEM_VERSION = '1.8.0';
+var DEM_TYPES = {
+  paiement: 'Déclaration de paiement',
+  coordonnees: 'Mise à jour de mes coordonnées',
+  solidarite: 'Événement à signaler',
+  message: 'Message au bureau'
+};
+var DEM_STATUTS = ['En attente', 'En cours', 'Validée', 'Refusée', 'Répondu', 'Annulée'];
+var DEM_ENTETES = ['ID', 'Reçue le', 'N° membre', 'Membre', 'Type', 'Cotisation', 'Montant', 'Mode',
+  'Référence', 'Date du paiement', 'Détail', 'Statut', 'Réponse du bureau', 'Traitée par', 'Traitée le', 'ID appli'];
+var DEM_MAX_JOUR = 15, DEM_MAX_PAIEMENTS_ATTENTE = 3, DEM_MONTANT_MAX = 5000000, DEM_TEXTE_MAX = 600;
+
+/** Point d'entrée unique, appelé par doPost. */
+function traiterDemande_(r) {
+  var res = traiterDemandeInterne_(r || {});
+  res.versionDemandes = DEM_VERSION;   // permet à l'appli de savoir que le module est installé
+  return res;
+}
+
+function traiterDemandeInterne_(r) {
+  try {
+    var qui = authentifierDemande_(r);
+    if (!qui.ok) return qui;
+    var op = String(r.op || 'liste');
+    if (op === 'envoyer') return envoyerDemande_(qui, r.demande || {});
+    if (op === 'annuler') return annulerDemande_(qui, String(r.id || ''));
+    if (op === 'statuer') return statuerDemande_(qui, String(r.id || ''), String(r.statut || ''), String(r.reponse || ''));
+    return listerDemandes_(qui);
+  } catch (e) {
+    return { ok: false, erreur: 'Le site n\'a pas pu traiter la démarche. Réessayez plus tard.' };
+  }
+}
+
+/** Mêmes portes et mêmes blocages que la consultation ; la carte seule est refusée. */
+function authentifierDemande_(r) {
+  var mode = r.mode === 'asso' ? 'asso' : r.mode === 'perso' ? 'perso' : '';
+  if (!mode) return { ok: false, erreur: 'La carte de membre ne permet pas de faire une démarche : ouvrez votre dossier personnel ou connectez-vous.' };
+  var res = consulter(mode, r.ident, r.code, String(r.jeton || '').replace(/[^\w-]/g, '').slice(0, 64));
+  if (!res || !res.ok || !res.moi || !res.moi.i) return { ok: false, erreur: (res && res.erreur) || 'Accès refusé.' };
+  var f = String(res.moi.fonction || '').toLowerCase();
+  var tresorier = /tr[ée]sori/.test(f);
+  var bureau = tresorier || /pr[ée]sident|secr[ée]taire/.test(f);
+  return {
+    ok: true, i: String(res.moi.i),
+    nom: [res.moi.nom, res.moi.prenoms].join(' ').replace(/\s+/g, ' ').trim(),
+    fonction: res.moi.fonction || '', bureau: bureau, tresorier: tresorier
+  };
+}
+
+// ------------------------------------------------------------------ registre (classeur Google)
+function feuilleDemandes_() {
+  var p = PropertiesService.getScriptProperties(), id = p.getProperty('DEMANDES_CLASSEUR'), ss = null;
+  if (id) { try { ss = SpreadsheetApp.openById(id); } catch (e) { ss = null; } }
+  if (!ss) {
+    ss = SpreadsheetApp.create('AMEDIS pro Asso – Démarches des membres');
+    p.setProperty('DEMANDES_CLASSEUR', ss.getId());
+  }
+  var sh = ss.getSheetByName('Démarches');
+  if (!sh) {
+    sh = ss.getSheets()[0];
+    sh.setName('Démarches');
+    sh.getRange(1, 1, 1, DEM_ENTETES.length).setValues([DEM_ENTETES]).setFontWeight('bold')
+      .setBackground('#0F6B45').setFontColor('#FFFFFF');
+    sh.setFrozenRows(1);
+    sh.getRange('L2:L').setDataValidation(SpreadsheetApp.newDataValidation()
+      .requireValueInList(DEM_STATUTS, true).setAllowInvalid(false).build());
+  }
+  return sh;
+}
+
+function lignesDemandes_() {
+  var sh = feuilleDemandes_(), n = sh.getLastRow();
+  if (n < 2) return { sh: sh, lignes: [] };
+  return { sh: sh, lignes: sh.getRange(2, 1, n - 1, DEM_ENTETES.length).getValues() };
+}
+
+function versObjet_(l, avecMembre) {
+  var o = {
+    id: String(l[0]), recueLe: dateIso_(l[1]), type: String(l[4]), libelle: DEM_TYPES[l[4]] || String(l[4]),
+    cotisation: String(l[5]), montant: Number(l[6]) || 0, modePaiement: String(l[7]), reference: String(l[8]),
+    datePaiement: String(l[9]), detail: String(l[10]), statut: String(l[11] || 'En attente'),
+    reponse: String(l[12]), traiteePar: String(l[13]), traiteeLe: dateIso_(l[14]), idAppli: String(l[15])
+  };
+  if (avecMembre) { o.membre = String(l[3]); o.numero = String(l[2]); }
+  return o;
+}
+
+function dateIso_(d) {
+  if (!d) return '';
+  try { return (d instanceof Date ? d : new Date(d)).toISOString(); } catch (e) { return String(d); }
+}
+
+function propre_(s, max) {
+  return String(s == null ? '' : s).replace(/[\u0000-\u001f<>]/g, ' ').replace(/^[=+\-@]+/, '')
+    .replace(/\s+/g, ' ').trim().slice(0, max || 120);
+}
+
+// ------------------------------------------------------------------ opérations
+function envoyerDemande_(qui, d) {
+  var type = String(d.type || '');
+  if (!DEM_TYPES[type]) return { ok: false, erreur: 'Type de démarche inconnu.' };
+  var idAppli = String(d.idAppli || '').replace(/[^\w-]/g, '').slice(0, 40);
+  var ligne = {
+    cotisation: propre_(d.cotisation, 60), montant: 0, mode: propre_(d.modePaiement, 40),
+    reference: propre_(d.reference, 60), date: propre_(d.datePaiement, 10), detail: propre_(d.detail, DEM_TEXTE_MAX)
+  };
+  if (type === 'paiement') {
+    ligne.montant = Math.round(Number(d.montant) || 0);
+    if (ligne.montant < 1 || ligne.montant > DEM_MONTANT_MAX) return { ok: false, erreur: 'Montant invalide.' };
+    if (!ligne.cotisation) return { ok: false, erreur: 'Choisissez la cotisation concernée.' };
+    if (!ligne.mode) return { ok: false, erreur: 'Indiquez le mode de paiement.' };
+  } else if (!ligne.detail) {
+    return { ok: false, erreur: 'Écrivez le contenu de votre démarche.' };
+  }
+
+  var verrou = LockService.getScriptLock();
+  verrou.waitLock(20000);
+  try {
+    var t = lignesDemandes_(), aujourdhui = Utilities.formatDate(new Date(), 'GMT', 'yyyy-MM-dd');
+    var duJour = 0, enAttente = 0;
+    for (var k = 0; k < t.lignes.length; k++) {
+      var l = t.lignes[k];
+      if (String(l[2]) !== qui.i) continue;
+      if (idAppli && String(l[15]) === idAppli) return { ok: true, demande: versObjet_(l), doublon: true };
+      if (dateIso_(l[1]).slice(0, 10) === aujourdhui) duJour++;
+      if (l[4] === 'paiement' && (l[11] === 'En attente' || l[11] === 'En cours')) enAttente++;
+    }
+    if (duJour >= DEM_MAX_JOUR) return { ok: false, erreur: 'Limite de ' + DEM_MAX_JOUR + ' démarches par jour atteinte. Réessayez demain.' };
+    if (type === 'paiement' && enAttente >= DEM_MAX_PAIEMENTS_ATTENTE)
+      return { ok: false, erreur: 'Vous avez déjà ' + enAttente + ' paiements en attente de validation par le trésorier.' };
+    var id = 'D' + Utilities.formatDate(new Date(), 'GMT', 'yyMMddHHmmss') + Math.floor(Math.random() * 90 + 10);
+    var valeurs = [id, new Date(), qui.i, qui.nom, type, ligne.cotisation, ligne.montant || '', ligne.mode,
+      ligne.reference, ligne.date, ligne.detail, 'En attente', '', '', '', idAppli];
+    t.sh.appendRow(valeurs);
+    return { ok: true, demande: versObjet_(valeurs) };
+  } finally {
+    verrou.releaseLock();
+  }
+}
+
+function annulerDemande_(qui, id) {
+  var verrou = LockService.getScriptLock();
+  verrou.waitLock(20000);
+  try {
+    var t = lignesDemandes_();
+    for (var k = 0; k < t.lignes.length; k++) {
+      var l = t.lignes[k];
+      if (String(l[0]) !== id) continue;
+      if (String(l[2]) !== qui.i) return { ok: false, erreur: 'Cette démarche ne vous appartient pas.' };
+      if (l[11] !== 'En attente') return { ok: false, erreur: 'Démarche déjà prise en charge par le bureau : elle ne peut plus être annulée.' };
+      t.sh.getRange(k + 2, 12, 1, 4).setValues([['Annulée', 'Annulée par le membre', qui.nom, new Date()]]);
+      return { ok: true };
+    }
+    return { ok: false, erreur: 'Démarche introuvable.' };
+  } finally {
+    verrou.releaseLock();
+  }
+}
+
+function statuerDemande_(qui, id, statut, reponse) {
+  if (!qui.bureau) return { ok: false, erreur: 'Réservé au bureau de l\'association.' };
+  if (['En cours', 'Validée', 'Refusée', 'Répondu'].indexOf(statut) < 0) return { ok: false, erreur: 'Statut invalide.' };
+  reponse = propre_(reponse, 300);
+  var verrou = LockService.getScriptLock();
+  verrou.waitLock(20000);
+  try {
+    var t = lignesDemandes_();
+    for (var k = 0; k < t.lignes.length; k++) {
+      var l = t.lignes[k];
+      if (String(l[0]) !== id) continue;
+      if (l[4] === 'paiement' && !qui.tresorier) return { ok: false, erreur: 'Seul le trésorier statue sur un paiement.' };
+      if (String(l[2]) === qui.i) return { ok: false, erreur: 'Vous ne pouvez pas statuer sur votre propre démarche.' };
+      if (l[11] === 'Annulée') return { ok: false, erreur: 'Démarche annulée par le membre.' };
+      if (statut === 'Refusée' && !reponse) return { ok: false, erreur: 'Indiquez le motif du refus.' };
+      t.sh.getRange(k + 2, 12, 1, 4).setValues([[statut, reponse, qui.nom + (qui.fonction ? ' (' + qui.fonction + ')' : ''), new Date()]]);
+      return { ok: true };
+    }
+    return { ok: false, erreur: 'Démarche introuvable.' };
+  } finally {
+    verrou.releaseLock();
+  }
+}
+
+/** Le membre reçoit ses démarches ; le bureau reçoit en plus celles à traiter (60 dernières). */
+function listerDemandes_(qui) {
+  var t = lignesDemandes_(), miennes = [], bureau = [];
+  for (var k = t.lignes.length - 1; k >= 0; k--) {
+    var l = t.lignes[k];
+    if (String(l[2]) === qui.i) { if (miennes.length < 50) miennes.push(versObjet_(l)); }
+    else if (qui.bureau && bureau.length < 60 && l[11] !== 'Annulée') bureau.push(versObjet_(l, true));
+  }
+  return {
+    ok: true, miennes: miennes,
+    role: { bureau: qui.bureau, tresorier: qui.tresorier, fonction: qui.fonction },
+    bureau: qui.bureau ? bureau : undefined,
+    limites: { parJour: DEM_MAX_JOUR, paiementsEnAttente: DEM_MAX_PAIEMENTS_ATTENTE, montantMax: DEM_MONTANT_MAX }
+  };
+}
+
+// ------------------------------------------------------------------ logiciel AMEDIS pro Asso (PC du trésorier)
+/** Appelé par doPost APRÈS la vérification de la clé de publication : seul le poste du trésorier y accède.
+ *  op 'liste' : les 300 dernières démarches ; op 'statuer' : réponse du bureau enregistrée depuis le logiciel. */
+function demandesPC_(r) {
+  var op = String(r.op || 'liste');
+  if (op === 'statuer') {
+    var id = String(r.id || ''), statut = String(r.statut || ''), reponse = propre_(r.reponse, 300), par = propre_(r.par, 80) || 'Trésorier';
+    if (['En cours', 'Validée', 'Refusée', 'Répondu'].indexOf(statut) < 0) return { ok: false, erreur: 'Statut invalide.' };
+    if (statut === 'Refusée' && !reponse) return { ok: false, erreur: 'Indiquez le motif du refus.' };
+    var verrou = LockService.getScriptLock();
+    verrou.waitLock(20000);
+    try {
+      var t = lignesDemandes_();
+      for (var k = 0; k < t.lignes.length; k++) {
+        var l = t.lignes[k];
+        if (String(l[0]) !== id) continue;
+        if (l[11] === 'Annulée') return { ok: false, erreur: 'Démarche annulée par le membre.' };
+        t.sh.getRange(k + 2, 12, 1, 4).setValues([[statut, reponse, par + ' (logiciel AMEDIS pro Asso)', new Date()]]);
+        return { ok: true, versionDemandes: DEM_VERSION };
+      }
+      return { ok: false, erreur: 'Démarche introuvable.' };
+    } finally {
+      verrou.releaseLock();
+    }
+  }
+  var t2 = lignesDemandes_(), liste = [];
+  for (var j = t2.lignes.length - 1; j >= 0 && liste.length < 300; j--) liste.push(versObjet_(t2.lignes[j], true));
+  return { ok: true, versionDemandes: DEM_VERSION, demarches: liste };
+}

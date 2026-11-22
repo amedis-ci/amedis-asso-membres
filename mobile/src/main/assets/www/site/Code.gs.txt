@@ -1,0 +1,186 @@
+/**
+ * AMEDIS pro Asso — site de consultation des membres (lecture seule).
+ * À coller dans un projet Google Apps Script (fichiers Code.gs et Page.html), puis :
+ *   Déployer > Nouveau déploiement > Type : Application Web
+ *   Exécuter en tant que : Moi      Qui a accès : Tout le monde
+ * Copier l'adresse « …/exec » dans AMEDIS pro Asso (menu Codes QR), puis cliquer sur « Publier ».
+ *
+ * Le logiciel envoie une copie en lecture seule de l'exercice (« publication »). Elle est rangée dans un fichier
+ * de VOTRE Google Drive (dossier « AMEDIS pro Asso - publication »). Personne ne peut rien modifier par ce site.
+ * Accès : identifiant + code personnel du membre, ou lien personnel secret (QR envoyé au seul membre).
+ */
+var VERSION_SITE = '1.9.0';
+var DOSSIER_SAUVEGARDES = 'AMEDIS pro Asso - sauvegardes', SAUVEGARDES_GARDEES = 40;
+var NOM_DOSSIER = 'AMEDIS pro Asso - publication';
+var NOM_FICHIER = 'publication.json';
+var ESSAIS_MAX = 5, BLOCAGE_SECONDES = 900;
+
+// ------------------------------------------------------------------ pages
+function doGet(e) {
+  var p = (e && e.parameter) || {};
+  if (p.action === 'ping') return json_({ ok: true, version: VERSION_SITE, publie: !!lirePublication_() });
+  var t = HtmlService.createTemplateFromFile('Page');
+  t.mode = ['asso', 'membre', 'perso', 'carte'].indexOf(p.v) >= 0 ? p.v : 'asso';
+  t.jeton = String(p.t || '').replace(/[^\w-]/g, '').slice(0, 64);
+  return t.evaluate()
+    .setTitle('Consultation des membres')
+    .addMetaTag('viewport', 'width=device-width, initial-scale=1')
+    .setXFrameOptionsMode(HtmlService.XFrameOptionsMode.DEFAULT);
+}
+
+// ------------------------------------------------------------------ publication depuis le logiciel
+function doPost(e) {
+  try {
+    var r = JSON.parse(e.postData.contents);
+    if (r.action === 'app') return json_(consulterApp_(r));   // appli Android des membres (lecture seule)
+    if (r.action === 'demande') return json_(traiterDemande_(r));   // appli : démarches des membres (fichier Demandes.gs)
+    if (r.action === 'message') return json_(traiterMessage_(r));   // appli : messagerie du bureau (fichier Bureau.gs)
+    if (r.action === 'operation') return json_(traiterOperation_(r));   // appli : opérations du trésorier (fichier Bureau.gs)
+    if (['publier', 'sauvegarder', 'sauvegardes', 'lireSauvegarde', 'demandesPC', 'operationsPC', 'messagesPC'].indexOf(r.action) < 0) return json_({ ok: false, erreur: 'Action inconnue.' });
+    var props = PropertiesService.getScriptProperties();
+    var cle = props.getProperty('CLE_PUBLICATION');
+    if (!r.cle || String(r.cle).length < 20) return json_({ ok: false, erreur: 'Clé de publication absente.' });
+    if (!cle) props.setProperty('CLE_PUBLICATION', String(r.cle));             // premier envoi : le logiciel devient le seul autorisé
+    else if (cle !== String(r.cle)) return json_({ ok: false, erreur: "Ce site est déjà relié à un autre exercice ou à un autre poste. Pour le relier à ce poste, supprimez la propriété CLE_PUBLICATION (Paramètres du projet > Propriétés du script)." });
+    if (r.action === 'sauvegarder') return json_(sauvegarder_(r.nom, r.contenu));
+    if (r.action === 'sauvegardes') return json_({ ok: true, sauvegardes: listeSauvegardes_() });
+    if (r.action === 'lireSauvegarde') return json_(lireSauvegarde_(r.nom));
+    if (r.action === 'demandesPC') return json_(demandesPC_(r));   // logiciel du trésorier : démarches reçues
+    if (r.action === 'operationsPC') return json_(operationsPC_(r));   // logiciel du trésorier : opérations faites dans l'appli
+    if (r.action === 'messagesPC') return json_(messagesPC_(r));   // logiciel : messagerie écrite du bureau
+    var d = r.donnees;
+    if (!d || !d.asso || !d.membres) return json_({ ok: false, erreur: 'Publication vide.' });
+    d.recuLe = new Date().toISOString();
+    ecrirePublication_(JSON.stringify(d));
+    CacheService.getScriptCache().remove('pub');
+    return json_({ ok: true, membres: d.membres.length, recuLe: d.recuLe, version: VERSION_SITE });
+  } catch (err) {
+    return json_({ ok: false, erreur: 'Erreur du site : ' + err.message });
+  }
+}
+
+// ------------------------------------------------------------------ appels de la page (google.script.run)
+/** Consultation : mode 'asso' (tout, sauf paramètres), 'membre' (sa fiche seulement), 'perso' (lien personnel). */
+function consulter(mode, ident, code, jeton) {
+  var d = lirePublication_();
+  if (!d) return { ok: false, erreur: "Aucune donnée n'a encore été publiée. Le trésorier doit cliquer sur « Publier » dans AMEDIS pro Asso." };
+  var m = null;
+  if (mode === 'carte') {
+    // code QR de la carte de membre : identité et numéros d'urgence, aucune information financière
+    jeton = String(jeton || '');
+    m = jeton.length >= 16 ? d.membres.filter(function (x) { return x.jc === jeton; })[0] : null;
+    if (!m) return { ok: false, erreur: "Cette carte de membre n'est pas (ou plus) reconnue. Adressez-vous au bureau de l'association." };
+    var a = d.asso || {};
+    return { ok: true, mode: 'carte', publieLe: d.publieLe,
+      asso: { nom: a.nom, siege: a.siege, exercice: a.exercice, libelleResidence: a.libelleResidence, logo: a.logo, monnaie: a.monnaie, urgence: a.urgence || [] },
+      moi: { i: m.i, nom: m.nom, prenoms: m.prenoms, genre: m.genre, residence: m.residence, contact: m.contact, fonction: m.fonction, dateAdhesion: m.dateAdhesion, photo: m.photo, actif: m.actif } };
+  }
+  if (mode === 'perso') {
+    jeton = String(jeton || '');
+    if (jeton.length < 16) return { ok: false, erreur: 'Lien personnel incomplet.' };
+    m = d.membres.filter(function (x) { return x.j === jeton; })[0];
+    if (!m) return { ok: false, erreur: "Ce lien personnel n'est plus valable. Demandez-en un nouveau au bureau de l'association." };
+  } else {
+    var id = normIdent_(ident), cache = CacheService.getScriptCache(), cleE = 'ech_' + Utilities.base64EncodeWebSafe(id).slice(0, 200);
+    var n = Number(cache.get(cleE) || 0);
+    if (n >= ESSAIS_MAX) return { ok: false, erreur: 'Trop d\'essais incorrects pour cet identifiant. Réessayez dans 15 minutes.' };
+    var h = hash_(d.sel + '|' + id + '|' + String(code || '').trim());
+    m = d.membres.filter(function (x) { return normIdent_(x.i) === id && x.h === h; })[0];
+    if (!m) { cache.put(cleE, String(n + 1), BLOCAGE_SECONDES); return { ok: false, erreur: 'Identifiant ou code personnel incorrect.' + (n + 1 >= 3 ? ' (' + (ESSAIS_MAX - n - 1) + ' essai(s) restant(s))' : '') }; }
+    cache.remove(cleE);
+  }
+  var moi = membrePublic_(m, true);
+  var r = { ok: true, mode: mode, asso: d.asso, publieLe: d.publieLe, cotisations: d.cotisations.map(function (k) { return { nom: k.nom, colonnes: k.colonnes, couleur: k.couleur, attendu: k.attendu }; }), moi: moi };
+  if (mode === 'asso') {
+    r.tableau = d.tableau; r.bilan = d.bilan; r.depenses = d.depenses; r.dons = d.dons; r.categories = d.categories;
+    r.cotisations = d.cotisations;
+    // les autres membres : identité seulement (ni contact, ni photo, ni cotisations) ; le membre connecté a tout dans r.moi
+    r.membres = d.membres.map(function (x) { return membreAnnuaire_(x); });
+  }
+  return r;
+}
+
+/** Appli Android « AMEDIS Asso » : mêmes règles et même confidentialité que les pages du site (lecture seule).
+ *  perso : lien personnel ; carte : identité + urgence ; asso : identifiant + code personnel (blocage après 5 essais). */
+function consulterApp_(r) {
+  var mode = ['perso', 'carte', 'asso'].indexOf(r.mode) >= 0 ? r.mode : 'perso';
+  var res = consulter(mode, r.ident, r.code, String(r.jeton || '').replace(/[^\w-]/g, '').slice(0, 64));
+  res.versionSite = VERSION_SITE;
+  if (res.ok && mode !== 'carte' && res.moi) {
+    // lien de SA carte de membre (identité + urgence), pour la carte numérique de l'appli
+    var d = lirePublication_(), x = d && d.membres.filter(function (y) { return y.i === res.moi.i; })[0];
+    if (x && x.jc) res.jetonCarte = x.jc;
+    // tableau de bord de l'association, visible par tous les membres dans l'appli (totaux seulement)
+    if (d && !res.tableau) {
+      res.tableau = d.tableau;
+      res.resumes = d.cotisations.map(function (k) { return { nom: k.nom, couleur: k.couleur, taux: k.resume ? k.resume.taux : 0, total: k.resume ? k.resume.total : 0 }; });
+    }
+    var f = String(res.moi.fonction || '');
+    res.role = { bureau: /tr[ée]sori|pr[ée]sident|secr[ée]taire/i.test(f), tresorier: /tr[ée]sori/i.test(f), fonction: f, operations: !!(d && d.gestion && d.gestion.opsH) };
+  }
+  return res;
+}
+
+// ------------------------------------------------------------------ sauvegardes (fichiers .amasso dans le Drive de l'association)
+function dossierSauvegardes_() {
+  var it = DriveApp.getFoldersByName(DOSSIER_SAUVEGARDES);
+  return it.hasNext() ? it.next() : DriveApp.createFolder(DOSSIER_SAUVEGARDES);
+}
+function sauvegarder_(nom, contenu) {
+  if (!contenu || String(contenu).length < 20) return { ok: false, erreur: 'Sauvegarde vide.' };
+  JSON.parse(contenu);   // contrôle : contenu JSON valide
+  var d = dossierSauvegardes_(), horo = Utilities.formatDate(new Date(), Session.getScriptTimeZone() || 'GMT', 'yyyy-MM-dd HH\'h\'mm');
+  var n = String(nom || 'exercice').replace(/[\\\/:*?"<>|]+/g, '_').slice(0, 100) + ' - ' + horo + '.amasso';
+  d.createFile(n, contenu, 'application/json');
+  var l = []; var it = d.getFiles(); while (it.hasNext()) l.push(it.next());
+  l.sort(function (a, b) { return b.getDateCreated() - a.getDateCreated(); });
+  l.slice(SAUVEGARDES_GARDEES).forEach(function (f) { f.setTrashed(true); });
+  return { ok: true, nom: n };
+}
+function listeSauvegardes_() {
+  var l = [], it = dossierSauvegardes_().getFiles();
+  while (it.hasNext()) { var f = it.next(); l.push({ nom: f.getName(), date: f.getDateCreated().toISOString(), taille: f.getSize() }); }
+  l.sort(function (a, b) { return a.date < b.date ? 1 : -1; });
+  return l;
+}
+function lireSauvegarde_(nom) {
+  var it = dossierSauvegardes_().getFilesByName(String(nom || ''));
+  if (!it.hasNext()) return { ok: false, erreur: 'Sauvegarde introuvable.' };
+  return { ok: true, contenu: it.next().getBlob().getDataAsString('UTF-8') };
+}
+
+// ------------------------------------------------------------------ outils
+function membrePublic_(m, avecPhoto) {
+  var o = {};
+  for (var k in m) if (k !== 'h' && k !== 'j' && k !== 'jc' && (avecPhoto || k !== 'photo')) o[k] = m[k];
+  return o;
+}
+/** Liste des membres vue par un membre : nom, prénoms, identifiant, genre, résidence, fonction — rien d'autre */
+function membreAnnuaire_(m) {
+  return { i: m.i, nom: m.nom, prenoms: m.prenoms, genre: m.genre, residence: m.residence, fonction: m.fonction, actif: m.actif };
+}
+function normIdent_(s) { return String(s || '').toUpperCase().replace(/\s+/g, ' ').trim(); }
+function hash_(s) {
+  var b = Utilities.computeDigest(Utilities.DigestAlgorithm.SHA_256, s, Utilities.Charset.UTF_8);
+  return b.map(function (x) { var v = (x < 0 ? x + 256 : x).toString(16); return v.length === 1 ? '0' + v : v; }).join('');
+}
+function json_(o) { return ContentService.createTextOutput(JSON.stringify(o)).setMimeType(ContentService.MimeType.JSON); }
+function dossier_() {
+  var it = DriveApp.getFoldersByName(NOM_DOSSIER);
+  return it.hasNext() ? it.next() : DriveApp.createFolder(NOM_DOSSIER);
+}
+function ecrirePublication_(texte) {
+  var dos = dossier_(), it = dos.getFilesByName(NOM_FICHIER);
+  if (it.hasNext()) it.next().setContent(texte); else dos.createFile(NOM_FICHIER, texte, 'application/json');
+}
+function lirePublication_() {
+  var cache = CacheService.getScriptCache(), c = cache.get('pub');
+  if (c) return JSON.parse(c);
+  var it = DriveApp.getFoldersByName(NOM_DOSSIER);
+  if (!it.hasNext()) return null;
+  var f = it.next().getFilesByName(NOM_FICHIER);
+  if (!f.hasNext()) return null;
+  var t = f.next().getBlob().getDataAsString('UTF-8');
+  if (t.length < 90000) cache.put('pub', t, 600);
+  return JSON.parse(t);
+}

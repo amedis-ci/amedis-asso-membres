@@ -1,0 +1,63 @@
+plugins {
+    id 'com.android.application'
+}
+
+// AMEDIS pro Asso Mobile : le logiciel complet de gestion d'association, sans ordinateur.
+// Renseignés automatiquement par GitHub au moment de la fabrication
+def versionAppli = System.getenv('APP_VERSION') ?: '1.0.0'
+def numeroFabrication = (System.getenv('GITHUB_RUN_NUMBER') ?: '1') as Integer
+def cleSignature = System.getenv('KEYSTORE_FILE')
+
+android {
+    namespace 'ci.amedis.asso.pro'
+    compileSdk 34
+
+    defaultConfig {
+        applicationId 'ci.amedis.asso.pro'
+        minSdk 26
+        targetSdk 34
+        versionCode numeroFabrication
+        versionName versionAppli
+    }
+
+    buildFeatures { buildConfig true }
+
+    signingConfigs {
+        release {
+            if (cleSignature) {
+                storeFile file(cleSignature)
+                storePassword System.getenv('KEYSTORE_PASSWORD')
+                keyAlias 'amedis'
+                keyPassword System.getenv('KEYSTORE_PASSWORD')
+            }
+        }
+    }
+
+    buildTypes {
+        release {
+            minifyEnabled false
+            signingConfig cleSignature ? signingConfigs.release : signingConfigs.debug
+        }
+    }
+
+    // les écrans du logiciel (www) ne doivent pas être compressés ni filtrés
+    androidResources {
+        noCompress 'html', 'js', 'css'
+        ignoreAssetsPattern '!.svn:!.git:!.ds_store:!*.scc:!CVS:!thumbs.db:!picasa.ini:!*~'
+    }
+
+    lint {
+        checkReleaseBuilds false
+        abortOnError false
+    }
+
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
+    }
+}
+
+dependencies {
+    // partage des documents (Android 8 et 9)
+    implementation 'androidx.core:core:1.12.0'
+}

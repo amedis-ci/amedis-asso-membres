@@ -1,0 +1,286 @@
+/**
+ * AMEDIS pro Asso – Site 1.9.0 – Module « Bureau » : messagerie et opérations du trésorier
+ * Conception : M. KAMAGATE, Inspecteur d'Orientation, CIO Bouaké 2.
+ *
+ * Fichier À AJOUTER au projet Apps Script du site (Fichier > + > Script, nom : Bureau),
+ * à côté de Code.gs (1.9.0), Demandes et Page.
+ *
+ * MESSAGERIE
+ *  - Le Président, le Secrétaire général et le Trésorier (fonction publiée par le logiciel) écrivent
+ *    à un ou plusieurs membres ou à toute l'association, par écrit ou par message vocal.
+ *  - Un membre ne fait que RÉPONDRE au membre du bureau qui lui a écrit (jamais aux autres membres).
+ *  - Chacun ne voit que les messages qu'il a envoyés ou reçus. La carte de membre seule ne donne rien.
+ *  - Messages vocaux : 2 min 30 au plus, rangés dans le Drive de l'association.
+ *  - Le LOGICIEL du PC écrit aussi (messages écrits) depuis le compte du Trésorier, du Président ou du SG ;
+ *    chaque compte a sa boîte (code PC-tresorier, PC-president, PC-sg) et les membres lui répondent.
+ *
+ * OPÉRATIONS DU TRÉSORIER
+ *  - Réservées au membre dont la fonction est « Trésorier », avec le CODE D'OPÉRATIONS défini dans le
+ *    logiciel (Paramètres > Sécurité) ; 5 erreurs = blocage 15 minutes.
+ *  - Une opération faite sur le téléphone est GARDÉE ici « En attente » : c'est le logiciel du PC qui
+ *    l'applique (reçu, dépense, don, membre, réunion, solidarité), puis publie. Le PC reste la référence.
+ */
+
+var BUR_VERSION = '1.9.0';
+var MSG_ENTETES = ['ID', 'Envoyé le', 'De (n°)', 'De (nom)', 'Fonction', 'Pour', 'Type', 'Texte', 'Audio', 'Durée (s)', 'Réponse à', 'ID appli'];
+var OPS_ENTETES = ['ID', 'Reçue le', 'Par (n°)', 'Par (nom)', 'Exercice', 'Type', 'Résumé', 'Données', 'Statut', 'Résultat', 'Traitée le', 'ID appli'];
+var OPS_TYPES = { encaissement: 'Encaissement', depense: 'Dépense', don: 'Don', membre_ajout: 'Nouveau membre', membre_modif: 'Membre modifié',
+  reunion: 'Réunion et appel', solidarite_evt: 'Événement de solidarité', solidarite_aide: 'Aide de solidarité remise' };
+var MSG_MAX_JOUR = 40, MSG_TEXTE_MAX = 1500, MSG_AUDIO_MAX = 2600000, OPS_MAX_JOUR = 300, OPS_TAILLE_MAX = 20000;
+var DOSSIER_VOCAUX = 'AMEDIS pro Asso - Messages vocaux';
+var PC_FONCTIONS = { tresorier: 'Trésorier', president: 'Président', sg: 'Secrétaire général' };
+
+// ------------------------------------------------------------------ classeur (le même que les démarches)
+function feuilleBureau_(nom, entetes) {
+  feuilleDemandes_();   // crée le classeur au besoin
+  var ss = SpreadsheetApp.openById(PropertiesService.getScriptProperties().getProperty('DEMANDES_CLASSEUR'));
+  var sh = ss.getSheetByName(nom);
+  if (!sh) {
+    sh = ss.insertSheet(nom);
+    sh.getRange(1, 1, 1, entetes.length).setValues([entetes]).setFontWeight('bold').setBackground('#0F6B45').setFontColor('#FFFFFF');
+    sh.setFrozenRows(1);
+  }
+  return sh;
+}
+function lignes_(sh, n) {
+  var d = sh.getLastRow();
+  return d < 2 ? [] : sh.getRange(2, 1, d - 1, n).getValues();
+}
+function jour_(d) { return dateIso_(d).slice(0, 10); }
+
+// ------------------------------------------------------------------ MESSAGERIE
+function traiterMessage_(r) {
+  try {
+    if (r && r.mode === 'carte') return { ok: false, erreur: 'La carte de membre seule ne donne pas accès à cet espace : ouvrez votre dossier personnel ou connectez-vous.', versionBureau: BUR_VERSION };
+    var qui = authentifierDemande_(r || {});
+    if (!qui.ok) return qui;
+    var op = String(r.op || 'boite');
+    var res = op === 'envoyer' ? envoyerMessage_(qui, r) : op === 'audio' ? audioMessage_(qui, String(r.id || '')) : boiteMessages_(qui);
+    res.versionBureau = BUR_VERSION;
+    return res;
+  } catch (e) {
+    return { ok: false, erreur: 'Le site n\'a pas pu traiter le message. Réessayez plus tard.', versionBureau: BUR_VERSION };
+  }
+}
+
+function pourMoi_(l, i) {
+  var p = String(l[5]);
+  return p === 'TOUS' || p.indexOf('|' + i + '|') >= 0;
+}
+
+function versMessage_(l, i, noms) {
+  var p = String(l[5]), liste = p === 'TOUS' ? [] : p.split('|').filter(String);
+  return {
+    id: String(l[0]), le: dateIso_(l[1]), de: String(l[2]), deNom: String(l[3]), deFonction: String(l[4]),
+    pourTous: p === 'TOUS', pour: liste, pourNoms: p === 'TOUS' ? 'Toute l\'association' : liste.map(function (x) { return noms[x] || x; }).join(', '),
+    type: String(l[6]), texte: String(l[7]), audio: !!String(l[8]), duree: Number(l[9]) || 0, reponseA: String(l[10]), moi: String(l[2]) === i
+  };
+}
+
+function nomsMembres_() {
+  var d = lirePublication_(), n = {};
+  Object.keys(PC_FONCTIONS).forEach(function (r) { n['PC-' + r] = PC_FONCTIONS[r] + ' (logiciel)'; });
+  (d ? d.membres : []).forEach(function (m) { n[m.i] = [m.nom, m.prenoms].join(' ').replace(/\s+/g, ' ').trim(); });
+  return n;
+}
+
+function boiteMessages_(qui) {
+  var sh = feuilleBureau_('Messages', MSG_ENTETES), t = lignes_(sh, MSG_ENTETES.length), noms = nomsMembres_(), l = [];
+  for (var k = t.length - 1; k >= 0 && l.length < 150; k--) {
+    if (String(t[k][2]) === qui.i || pourMoi_(t[k], qui.i)) l.push(versMessage_(t[k], qui.i, noms));
+  }
+  var res = { ok: true, messages: l, role: { bureau: qui.bureau, tresorier: qui.tresorier, fonction: qui.fonction } };
+  if (qui.bureau) {
+    var d = lirePublication_();
+    res.annuaire = (d ? d.membres : []).filter(function (m) { return m.actif !== false && m.i !== qui.i; })
+      .map(function (m) { return { i: m.i, nom: [m.nom, m.prenoms].join(' ').replace(/\s+/g, ' ').trim(), fonction: m.fonction || '' }; });
+  }
+  return res;
+}
+
+function envoyerMessage_(qui, r) {
+  var m = r.message || {};
+  var texte = propre_(m.texte, MSG_TEXTE_MAX), audio = String(m.audio || '').replace(/[^A-Za-z0-9+\/=]/g, '');
+  var idAppli = String(m.idAppli || '').replace(/[^\w-]/g, '').slice(0, 40), duree = Math.max(0, Math.min(150, Math.round(Number(m.duree) || 0)));
+  if (!texte && !audio) return { ok: false, erreur: 'Écrivez un message ou enregistrez un message vocal.' };
+  if (audio.length > MSG_AUDIO_MAX) return { ok: false, erreur: 'Message vocal trop long (2 min 30 au plus).' };
+  var sh = feuilleBureau_('Messages', MSG_ENTETES);
+  var verrou = LockService.getScriptLock();
+  verrou.waitLock(20000);
+  try {
+    var t = lignes_(sh, MSG_ENTETES.length), aujourdhui = jour_(new Date()), duJour = 0, orig = null, reponseA = String(m.reponseA || '');
+    for (var k = 0; k < t.length; k++) {
+      if (String(t[k][2]) !== qui.i) { if (reponseA && String(t[k][0]) === reponseA) orig = t[k]; continue; }
+      if (idAppli && String(t[k][11]) === idAppli) return { ok: true, doublon: true };
+      if (jour_(t[k][1]) === aujourdhui) duJour++;
+      if (reponseA && String(t[k][0]) === reponseA) orig = t[k];
+    }
+    if (duJour >= MSG_MAX_JOUR) return { ok: false, erreur: 'Limite de ' + MSG_MAX_JOUR + ' messages par jour atteinte.' };
+    var pour;
+    if (!qui.bureau) {
+      // un membre répond uniquement au membre du bureau qui lui a écrit
+      if (!orig || !pourMoi_(orig, qui.i)) return { ok: false, erreur: 'Vous pouvez seulement répondre à un message du bureau.' };
+      if (!/tr[ée]sori|pr[ée]sident|secr[ée]taire/i.test(String(orig[4]))) return { ok: false, erreur: 'Vous pouvez seulement répondre à un message du bureau.' };
+      pour = '|' + String(orig[2]) + '|';
+    } else if (m.pour === 'TOUS') {
+      pour = 'TOUS';
+    } else {
+      var connus = nomsMembres_(), liste = (m.pour instanceof Array ? m.pour : []).map(String).filter(function (x, i, a) { return connus[x] && x.indexOf('PC-') !== 0 && x !== qui.i && a.indexOf(x) === i; });
+      if (orig && !liste.length && String(orig[2]) !== qui.i) liste = [String(orig[2])];
+      if (!liste.length) return { ok: false, erreur: 'Choisissez au moins un destinataire.' };
+      if (liste.length > 300) return { ok: false, erreur: 'Trop de destinataires : choisissez « Toute l\'association ».' };
+      pour = '|' + liste.join('|') + '|';
+    }
+    var id = 'M' + Utilities.formatDate(new Date(), 'GMT', 'yyMMddHHmmss') + Math.floor(Math.random() * 900 + 100), fichier = '';
+    if (audio) {
+      var it = DriveApp.getFoldersByName(DOSSIER_VOCAUX), dos = it.hasNext() ? it.next() : DriveApp.createFolder(DOSSIER_VOCAUX);
+      fichier = dos.createFile(id + '.m4a.txt', audio, 'text/plain').getName();
+    }
+    var valeurs = [id, new Date(), qui.i, qui.nom, qui.fonction, pour, audio ? 'vocal' : 'texte', texte, fichier, audio ? duree : '', orig ? String(orig[0]) : '', idAppli];
+    sh.appendRow(valeurs);
+    return { ok: true, message: versMessage_(valeurs, qui.i, nomsMembres_()) };
+  } finally {
+    verrou.releaseLock();
+  }
+}
+
+function audioMessage_(qui, id) {
+  var t = lignes_(feuilleBureau_('Messages', MSG_ENTETES), MSG_ENTETES.length);
+  for (var k = 0; k < t.length; k++) {
+    if (String(t[k][0]) !== id) continue;
+    if (String(t[k][2]) !== qui.i && !pourMoi_(t[k], qui.i)) return { ok: false, erreur: 'Message introuvable.' };
+    if (!String(t[k][8])) return { ok: false, erreur: 'Pas de message vocal.' };
+    var it = DriveApp.getFoldersByName(DOSSIER_VOCAUX);
+    var f = it.hasNext() ? it.next().getFilesByName(String(t[k][8])) : null;
+    if (!f || !f.hasNext()) return { ok: false, erreur: 'Message vocal introuvable.' };
+    return { ok: true, audio: f.next().getBlob().getDataAsString(), duree: Number(t[k][9]) || 0 };
+  }
+  return { ok: false, erreur: 'Message introuvable.' };
+}
+
+/** Messagerie écrite du LOGICIEL (clé de publication vérifiée par Code.gs) : op 'boite' ou 'envoyer'.
+ *  Le compte connecté au logiciel (trésorier, président, SG) écrit sous sa fonction ; il reçoit les réponses. */
+function messagesPC_(r) {
+  try {
+    var role = PC_FONCTIONS[r.role] ? r.role : 'tresorier';
+    var qui = { ok: true, i: 'PC-' + role, nom: propre_(r.nom, 80) || PC_FONCTIONS[role], fonction: PC_FONCTIONS[role], bureau: true, tresorier: role === 'tresorier' };
+    var res;
+    if (String(r.op || 'boite') === 'envoyer') {
+      var m = r.message || {};
+      if (m.audio) return { ok: false, erreur: 'Le logiciel envoie des messages écrits.', versionBureau: BUR_VERSION };
+      res = envoyerMessage_(qui, { message: m });
+    } else {
+      res = boiteMessages_(qui);
+      delete res.annuaire;   // le logiciel a sa propre liste des membres
+    }
+    res.versionBureau = BUR_VERSION;
+    return res;
+  } catch (e) {
+    return { ok: false, erreur: 'Le site n\'a pas pu traiter le message. Réessayez plus tard.', versionBureau: BUR_VERSION };
+  }
+}
+
+// ------------------------------------------------------------------ OPÉRATIONS DU TRÉSORIER (appli)
+function traiterOperation_(r) {
+  try {
+    if (r && r.mode === 'carte') return { ok: false, erreur: 'La carte de membre seule ne donne pas accès à cet espace : ouvrez votre dossier personnel ou connectez-vous.', versionBureau: BUR_VERSION };
+    var qui = authentifierDemande_(r || {});
+    if (!qui.ok) return qui;
+    if (!qui.tresorier) return { ok: false, erreur: 'Réservé au trésorier de l\'association.', versionBureau: BUR_VERSION };
+    var d = lirePublication_(), g = (d && d.gestion) || {};
+    if (!g.opsH) return { ok: false, erreur: 'Les opérations depuis l\'appli ne sont pas activées : dans AMEDIS pro Asso, Paramètres > Sécurité > « Code d\'opérations du trésorier », puis Publier.', versionBureau: BUR_VERSION };
+    var cache = CacheService.getScriptCache(), cleE = 'ops_' + Utilities.base64EncodeWebSafe(qui.i).slice(0, 100), n = Number(cache.get(cleE) || 0);
+    if (n >= ESSAIS_MAX) return { ok: false, erreur: 'Trop d\'essais incorrects du code d\'opérations. Réessayez dans 15 minutes.', codeRefuse: true, versionBureau: BUR_VERSION };
+    if (hash_(d.sel + '|OPS|' + String(r.codeOps || '').trim()) !== g.opsH) {
+      cache.put(cleE, String(n + 1), BLOCAGE_SECONDES);
+      return { ok: false, erreur: 'Code d\'opérations incorrect.' + (n + 1 >= 3 ? ' (' + (ESSAIS_MAX - n - 1) + ' essai(s) restant(s))' : ''), codeRefuse: true, versionBureau: BUR_VERSION };
+    }
+    cache.remove(cleE);
+    var op = String(r.op || 'contexte'), res = op === 'envoyer' ? envoyerOperation_(qui, d, r.operation || {}) : contexteOperations_(qui, d);
+    res.versionBureau = BUR_VERSION;
+    return res;
+  } catch (e) {
+    return { ok: false, erreur: 'Le site n\'a pas pu traiter l\'opération. Réessayez plus tard.', versionBureau: BUR_VERSION };
+  }
+}
+
+/** Ce dont l'appli du trésorier a besoin pour remplir ses formulaires (copie publiée par le logiciel). */
+function contexteOperations_(qui, d) {
+  var t = lignes_(feuilleBureau_('Opérations', OPS_ENTETES), OPS_ENTETES.length), mes = [];
+  for (var k = t.length - 1; k >= 0 && mes.length < 60; k--) mes.push(versOperation_(t[k]));
+  var g = d.gestion || {};
+  return {
+    ok: true, exercice: d.asso.exercice, monnaie: d.asso.monnaie, publieLe: d.publieLe,
+    cotisations: d.cotisations.map(function (k, i) { return { index: i, nom: k.nom, colonnes: k.colonnes, couleur: k.couleur }; }),
+    caisses: g.caisses || [], categories: g.categories || [], reunions: g.reunions || [], evenements: g.evenements || [],
+    typesEvenement: g.typesEvenement || {}, prochainIdent: g.prochainIdent || '',
+    membres: d.membres.map(function (m) {
+      return { i: m.i, nom: m.nom, prenoms: m.prenoms, genre: m.genre, residence: m.residence, contact: m.contact, fonction: m.fonction,
+        dateAdhesion: m.dateAdhesion, actif: m.actif, c: (m.c || []).map(function (x) { return { r: x.r, a: x.a, t: x.t, nc: x.nc, ok: x.ok, v: x.v }; }) };
+    }),
+    operations: mes
+  };
+}
+
+function versOperation_(l) {
+  return { id: String(l[0]), recueLe: dateIso_(l[1]), par: String(l[3]), exercice: String(l[4]), type: String(l[5]), libelle: OPS_TYPES[l[5]] || String(l[5]),
+    resume: String(l[6]), statut: String(l[8] || 'En attente'), resultat: String(l[9]), traiteeLe: dateIso_(l[10]), idAppli: String(l[11]) };
+}
+
+function envoyerOperation_(qui, d, o) {
+  var type = String(o.type || '');
+  if (!OPS_TYPES[type]) return { ok: false, erreur: 'Opération inconnue.' };
+  var donnees = JSON.stringify(o.donnees || {});
+  if (donnees.length > OPS_TAILLE_MAX) return { ok: false, erreur: 'Opération trop volumineuse.' };
+  if (String(o.exercice || '') !== String(d.asso.exercice)) return { ok: false, erreur: 'L\'exercice a changé : actualisez l\'appli avant de recommencer.' };
+  var idAppli = String(o.idAppli || '').replace(/[^\w-]/g, '').slice(0, 40), resume = propre_(o.resume, 200);
+  var sh = feuilleBureau_('Opérations', OPS_ENTETES);
+  var verrou = LockService.getScriptLock();
+  verrou.waitLock(20000);
+  try {
+    var t = lignes_(sh, OPS_ENTETES.length), aujourdhui = jour_(new Date()), duJour = 0;
+    for (var k = 0; k < t.length; k++) {
+      if (idAppli && String(t[k][11]) === idAppli) return { ok: true, doublon: true, operation: versOperation_(t[k]) };
+      if (jour_(t[k][1]) === aujourdhui) duJour++;
+    }
+    if (duJour >= OPS_MAX_JOUR) return { ok: false, erreur: 'Limite de ' + OPS_MAX_JOUR + ' opérations par jour atteinte.' };
+    var id = 'O' + Utilities.formatDate(new Date(), 'GMT', 'yyMMddHHmmss') + Math.floor(Math.random() * 900 + 100);
+    var valeurs = [id, new Date(), qui.i, qui.nom, String(d.asso.exercice), type, resume, donnees, 'En attente', '', '', idAppli];
+    sh.appendRow(valeurs);
+    return { ok: true, operation: versOperation_(valeurs) };
+  } finally {
+    verrou.releaseLock();
+  }
+}
+
+// ------------------------------------------------------------------ logiciel AMEDIS pro Asso (PC, clé de publication)
+/** Appelé par doPost APRÈS la vérification de la clé de publication. op 'liste' : opérations en attente ;
+ *  op 'resultat' : le logiciel note qu'il a appliqué (ou refusé) une opération. */
+function operationsPC_(r) {
+  var sh = feuilleBureau_('Opérations', OPS_ENTETES);
+  if (String(r.op || 'liste') === 'resultat') {
+    var id = String(r.id || ''), statut = r.statut === 'Rejetée' ? 'Rejetée' : 'Appliquée', resultat = propre_(r.resultat, 300);
+    var verrou = LockService.getScriptLock();
+    verrou.waitLock(20000);
+    try {
+      var t = lignes_(sh, OPS_ENTETES.length);
+      for (var k = 0; k < t.length; k++) {
+        if (String(t[k][0]) !== id) continue;
+        if (t[k][8] !== 'En attente') return { ok: true, deja: true };
+        sh.getRange(k + 2, 9, 1, 3).setValues([[statut, resultat, new Date()]]);
+        return { ok: true };
+      }
+      return { ok: false, erreur: 'Opération introuvable.' };
+    } finally {
+      verrou.releaseLock();
+    }
+  }
+  var l = lignes_(sh, OPS_ENTETES.length), attente = [];
+  for (var j = 0; j < l.length; j++) {
+    if (l[j][8] !== 'En attente') continue;
+    var o = versOperation_(l[j]);
+    try { o.donnees = JSON.parse(String(l[j][7])); } catch (e) { o.donnees = {}; }
+    attente.push(o);
+  }
+  return { ok: true, versionBureau: BUR_VERSION, operations: attente };
+}

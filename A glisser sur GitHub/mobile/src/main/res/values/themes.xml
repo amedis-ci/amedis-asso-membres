@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <style name="Theme.AmedisPro" parent="@android:style/Theme.Material.Light.NoActionBar">
+        <item name="android:colorPrimary">#0c2340</item>
+        <item name="android:colorPrimaryDark">#0c2340</item>
+        <item name="android:colorAccent">#f0b429</item>
+        <item name="android:windowBackground">@android:color/white</item>
+        <item name="android:statusBarColor">#0c2340</item>
+    </style>
+</resources>

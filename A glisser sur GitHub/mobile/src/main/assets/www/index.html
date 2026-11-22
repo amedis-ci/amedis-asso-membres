@@ -1,0 +1,122 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+  <meta charset="UTF-8">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; connect-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; script-src 'self'">
+  <title>AMEDIS pro Asso</title>
+  <link rel="stylesheet" href="styles.css">
+  <link rel="stylesheet" href="asso.css">
+  <link rel="stylesheet" href="theme2.css">
+  <link rel="stylesheet" href="mobile.css">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+</head>
+<body>
+  <!-- Connexion (version activée) -->
+  <section id="ecran-connexion" class="ecran-accueil ecran-duo masque">
+    <aside class="vitrine"></aside>
+    <div class="cote-carte">
+    <div class="accueil-carte connexion-carte">
+      <div class="accueil-entete">
+        <div class="logo-rond asso">A</div>
+        <div><h1>AMEDIS pro Asso</h1><p id="cx-sous">Connexion</p></div>
+      </div>
+      <div id="cx-corps"></div>
+    </div>
+    </div>
+  </section>
+
+  <!-- Écran d'accueil (aucun exercice ouvert) -->
+  <section id="ecran-accueil" class="ecran-accueil ecran-duo">
+    <aside class="vitrine"></aside>
+    <div class="cote-carte">
+    <div class="accueil-carte">
+      <button class="outil" data-bascule-theme style="position:absolute;right:16px;top:18px"></button>
+      <div class="accueil-entete">
+        <div class="logo-rond asso">A</div>
+        <div>
+          <h1>AMEDIS pro Asso</h1>
+          <p id="acc-salut">Gestion d'association — membres, cotisations, dépenses, dons et bilan financier</p>
+        </div>
+      </div>
+      <div id="accueil-licence" class="accueil-licence"></div>
+      <div class="accueil-actions">
+        <button class="btn btn-primaire btn-grand" id="btn-nouvelle">Nouvel exercice</button>
+        <button class="btn btn-grand" id="btn-reprise">Reprendre un classeur Excel…</button>
+        <button class="btn btn-grand" id="btn-ouvrir">Ouvrir un exercice…</button>
+      </div>
+      <h3 class="titre-section">Exercices récents</h3>
+      <div id="liste-recents" class="liste-recents"></div>
+      <p class="accueil-pied" id="accueil-pied"></p>
+    </div>
+    </div>
+  </section>
+
+  <!-- Application (exercice ouvert) -->
+  <div id="ecran-app" class="app masque">
+    <aside class="barre">
+      <div class="barre-marque">
+        <div class="logo-rond petit asso" id="marque-logo">A</div>
+        <div><strong>AMEDIS</strong><span>pro Asso</span></div>
+      </div>
+      <div id="asso-carte" class="asso-carte"></div>
+      <nav id="nav">
+        <a data-vue="tableau" class="actif"><i>▦</i>Tableau de bord</a>
+        <a data-vue="tableau" data-genre="H" class="sous-nav"><i>♂</i>Hommes</a>
+        <a data-vue="tableau" data-genre="F" class="sous-nav"><i>♀</i>Femmes</a>
+        <a data-vue="membres"><i>☺</i>Membres</a>
+        <a data-vue="membres" data-genre="H" class="sous-nav"><i>♂</i>Hommes</a>
+        <a data-vue="membres" data-genre="F" class="sous-nav"><i>♀</i>Femmes</a>
+        <a data-vue="reunions"><i>☷</i>Réunions</a>
+        <a data-vue="cotisations"><i>₣</i>Cotisations</a>
+        <a data-vue="cotisations" data-genre="H" class="sous-nav"><i>♂</i>Hommes</a>
+        <a data-vue="cotisations" data-genre="F" class="sous-nav"><i>♀</i>Femmes</a>
+        <a data-vue="depenses"><i>↘</i>Dépenses</a>
+        <a data-vue="dons"><i>♥</i>Dons</a>
+        <a data-vue="solidarite"><i>✚</i>Solidarité</a>
+        <a data-vue="caisses"><i>◫</i>Caisses</a>
+        <a data-vue="bilan"><i>⚖</i>Bilan financier</a>
+        <a data-vue="documents"><i>⎙</i>Documents</a>
+        <a data-vue="demarches"><i>✉</i>Démarches</a>
+        <a data-vue="messagerie"><i>💬</i>Messagerie</a>
+        <a data-vue="qr"><i>▣</i>Codes QR</a>
+        <a data-vue="parametres"><i>⚙</i>Paramètres</a>
+      </nav>
+      <div class="barre-pied">
+        <div id="utilisateur" class="utilisateur masque"></div>
+        <button id="btn-licence" class="licence-pastille">Licence…</button>
+        <div id="etat-enregistrement" class="etat-enreg">Enregistré</div>
+        <button class="btn btn-lien" id="btn-changer-session">Changer d'exercice</button>
+        <div class="barre-outils-bas"><button class="btn-barre" id="btn-visite" title="Visite guidée"></button><button class="btn-barre" id="btn-raccourcis" title="Raccourcis clavier"></button></div>
+      </div>
+    </aside>
+    <main class="contenu">
+      <div id="bandeau-licence" class="bandeau-licence masque"></div>
+      <header class="entete">
+        <div class="entete-gauche">
+          <h2 id="titre-vue">Tableau de bord</h2>
+          <div id="sous-titre" class="sous-titre"></div>
+        </div>
+        <div style="display:flex;align-items:center;gap:6px">
+          <div id="entete-actions" class="entete-actions"></div>
+          <div class="outils-entete"><button class="outil" id="btn-palette" title="Rechercher un membre, un reçu, un écran, une action (Ctrl + K)"></button><button class="outil" data-bascule-theme></button><button class="outil" id="btn-verrou" title="Verrouiller l'écran (Ctrl + L)"></button></div>
+        </div>
+      </header>
+      <div id="vue" class="vue"></div>
+    </main>
+  </div>
+
+  <div id="modale-fond" class="modale-fond masque"><div id="modale" class="modale"></div></div>
+  <div id="toasts" class="toasts"></div>
+
+  <script src="nacl.js"></script>
+  <script src="libs.js"></script>
+  <script src="natif.js"></script>
+  <script src="ui.js"></script>
+  <script src="modele.js"></script>
+  <script src="gestion.js"></script>
+  <script src="docs.js"></script>
+  <script src="publication.js"></script>
+  <script src="app.js"></script>
+  <script src="mobile.js"></script>
+</body>
+</html>

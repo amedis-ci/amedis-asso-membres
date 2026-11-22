@@ -1,0 +1,105 @@
+/* AMEDIS pro Asso — compléments de style */
+:root { --primaire: #1b2a4a; --primaire-fonce: #111c33; --primaire-clair: #e6eaf2; --accent: #d4a017; --accent-clair: #fbf3dc; }
+.logo-rond.asso { background: linear-gradient(135deg, #d4a017, #b8860b); }
+.logo-rond.photo { background-size: cover; background-position: center; color: transparent; }
+.ecran-accueil { background: radial-gradient(circle at 20% 10%, #2b3f6b, #0e1830 70%); }
+.asso-carte { margin: 12px 12px 4px; padding: 10px 12px; border-radius: 8px; background: rgba(255,255,255,.07); font-size: 12px; line-height: 1.4; color: var(--barre-texte, #dbe3f1); }
+.asso-carte b { display: block; font-size: 13px; color: #fff; }
+.kpis.k5 { grid-template-columns: repeat(5, 1fr); }
+.kpi.bleu .val { color: var(--bleu); }
+.kpi .val small { font-size: 13px; font-weight: 600; color: var(--texte-2); margin-left: 3px; }
+.panneaux-cot { display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: 18px; margin-bottom: 18px; }
+.panneau-cot { border-top: 4px solid var(--c, var(--primaire)); }
+.panneau-cot .ligne { display: flex; justify-content: space-between; padding: 6px 0; border-bottom: 1px solid #eef1f4; font-size: 13.5px; }
+.panneau-cot .ligne b { font-variant-numeric: tabular-nums; }
+.b-ok { background: #ddf3e6; color: #0a5a39; }
+.b-non { background: var(--rouge-clair); color: var(--rouge); }
+.b-inactif { background: var(--gris-clair); color: var(--texte-2); }
+.vignette { width: 34px; height: 34px; border-radius: 50%; object-fit: cover; display: block; background: var(--gris-clair); }
+.vignette.vide-photo { display: flex; align-items: center; justify-content: center; font-weight: 700; color: var(--texte-2); font-size: 13px; }
+tr.cliquable { cursor: pointer; }
+tr.cliquable:hover td { background: #f5f7fb; }
+.grille-cot { border-collapse: separate; border-spacing: 0; }
+.grille-cot td { padding: 3px 4px !important; }
+.grille-cot td.fixe, .grille-cot th.fixe { position: sticky; left: 0; background: #fff; z-index: 2; }
+.grille-cot th.fixe { z-index: 3; background: #f7f9fb; }
+.grille-cot input { width: 76px; text-align: right; border: 1px solid transparent; border-radius: 4px; padding: 5px 6px; background: #f8fafc; font-variant-numeric: tabular-nums; }
+.grille-cot input:hover { border-color: var(--bord-fort); }
+.grille-cot input:focus { outline: 2px solid #aebedc; border-color: var(--primaire); background: #fff; }
+.grille-cot input.plein { background: #eaf6ef; font-weight: 600; }
+.grille-cot input.err { background: var(--rouge-clair); border-color: var(--rouge); }
+.grille-cot tfoot td { font-weight: 700; background: #f7f9fb; position: sticky; bottom: 0; }
+.resume-cot { display: flex; gap: 22px; flex-wrap: wrap; align-items: center; padding: 10px 14px; border-radius: 8px; background: var(--surface); border: 1px solid var(--bord); border-left: 5px solid var(--c, var(--primaire)); margin-bottom: 12px; }
+.resume-cot div small { display: block; color: var(--texte-2); font-size: 11.5px; text-transform: uppercase; letter-spacing: .3px; }
+.resume-cot div b { font-size: 17px; font-variant-numeric: tabular-nums; }
+.barres-mois { display: grid; grid-template-columns: repeat(12, 1fr); gap: 8px; align-items: end; height: 190px; padding-top: 10px; }
+.barres-mois .m { display: flex; flex-direction: column; align-items: center; gap: 4px; height: 100%; justify-content: flex-end; }
+.barres-mois .duo { display: flex; gap: 3px; align-items: flex-end; height: 150px; }
+.barres-mois .duo div { width: 13px; border-radius: 3px 3px 0 0; min-height: 1px; }
+.barres-mois .r { background: #2f9e6a; } .barres-mois .d { background: #d1503f; }
+.barres-mois small { font-size: 11px; color: var(--texte-2); }
+.legende { display: flex; gap: 16px; font-size: 12px; color: var(--texte-2); margin-top: 6px; }
+.legende span::before { content: ''; display: inline-block; width: 10px; height: 10px; border-radius: 2px; margin-right: 5px; background: var(--c); vertical-align: -1px; }
+.solde-grand { font-size: 30px; font-weight: 800; font-variant-numeric: tabular-nums; }
+.solde-grand.neg { color: var(--rouge); } .solde-grand.pos { color: #0a5a39; }
+.photo-membre { width: 120px; height: 145px; border-radius: 8px; border: 1px solid var(--bord-fort); background: var(--gris-clair) center/cover no-repeat; display: flex; align-items: center; justify-content: center; color: var(--texte-2); font-size: 12px; }
+.form-membre { display: grid; grid-template-columns: 140px 1fr; gap: 18px; }
+.liste-cols { display: flex; flex-wrap: wrap; gap: 6px; }
+.liste-cols .col { display: inline-flex; align-items: center; gap: 4px; background: var(--gris-clair); border-radius: 14px; padding: 2px 4px 2px 10px; font-size: 12.5px; }
+.liste-cols .col button { border: none; background: none; cursor: pointer; color: var(--texte-2); font-size: 15px; padding: 0 4px; }
+.cot-param { border-left: 5px solid var(--c); }
+body.lecture-seule .ecriture { display: none !important; }
+.panneaux-cot .carte + .carte, .grille > .carte + .carte { margin-top: 0; }
+.grille > .carte { min-width: 0; }
+
+/* 1.1 — genre */
+nav a.sous-nav { display: none; padding: 6px 12px 6px 34px; font-size: 13px; }
+nav a.sous-nav.ouvert { display: flex; }
+nav a.sous-nav i { width: 14px; font-size: 12px; }
+.genre { display: inline-flex; align-items: center; justify-content: center; width: 20px; height: 20px; border-radius: 50%; font-size: 11px; font-weight: 700; color: #fff; vertical-align: middle; }
+.genre.g-H { background: #2563a8; } .genre.g-F { background: #be185d; } .genre.g-N { background: #9aa3ad; }
+tr.sous-ligne td { font-size: 12px; color: #555; padding-top: 2px; padding-bottom: 2px; }
+tr.sous-ligne td:first-child { padding-left: 22px; font-style: italic; }
+.bascule-genre { cursor: pointer; display: inline-block; } .bascule-genre:hover .genre { outline: 2px solid #f0b429; }
+
+/* 1.4 — connexion, rôles, codes QR */
+.connexion-carte { width: 460px; }
+.connexion-carte .champ { margin-bottom: 12px; }
+.connexion-carte input { width: 100%; }
+.connexion-carte .erreur-cx { background: #fdecea; color: #8c2318; border-radius: 8px; padding: 9px 12px; margin: 6px 0 10px; font-size: 13px; }
+.utilisateur { background: rgba(255,255,255,.07); border-radius: 8px; padding: 8px 10px; margin-bottom: 8px; font-size: 12px; color: #dfe6f2; }
+.utilisateur b { display: block; color: #fff; font-size: 13px; }
+.utilisateur .liens-u { margin-top: 5px; display: flex; gap: 10px; flex-wrap: wrap; }
+.utilisateur .liens-u a { color: #f0c96a; cursor: pointer; text-decoration: underline; font-size: 11.5px; }
+.bandeau-role { background: #fff7e0; border: 1px solid #f0d58a; color: #6b4e00; border-radius: 8px; padding: 9px 14px; margin-bottom: 14px; font-size: 13px; }
+.qr-grille { display: grid; grid-template-columns: repeat(auto-fill, minmax(330px, 1fr)); gap: 18px; }
+.qr-carte { text-align: center; }
+.qr-carte .qr-img { width: 220px; height: 220px; margin: 6px auto 10px; background: #fff; border: 1px solid #e3e7ee; border-radius: 10px; padding: 6px; }
+.qr-carte .qr-img svg { width: 100%; height: 100%; display: block; }
+.qr-carte .lien-qr { font-size: 11.5px; word-break: break-all; color: #5b6575; background: #f5f7fa; border-radius: 6px; padding: 6px 8px; margin: 6px 0 10px; text-align: left; }
+.qr-carte .groupe-btn { justify-content: center; flex-wrap: wrap; }
+.qr-perso { margin-top: 10px; text-align: center; border-top: 1px dashed #d6dbe3; padding-top: 10px; }
+.qr-perso .qr-img { width: 150px; height: 150px; margin: 4px auto 6px; background: #fff; padding: 4px; border: 1px solid #e3e7ee; border-radius: 8px; }
+.qr-perso .qr-img svg { width: 100%; height: 100%; display: block; }
+.qr-perso .code-perso { font-size: 12px; color: #444; margin: 2px 0 6px; }
+.qr-perso .code-perso b { font-size: 15px; letter-spacing: 2px; color: #0f6b45; }
+.etapes-site { margin: 0; padding-left: 20px; line-height: 1.75; font-size: 13.5px; }
+.etapes-site code { background: #f1f3f7; padding: 1px 5px; border-radius: 4px; }
+.pub-etat { font-size: 13px; padding: 8px 12px; border-radius: 8px; background: #f3f6f4; margin-top: 10px; }
+.pub-etat.ok { background: #e6f5ec; color: #135a31; } .pub-etat.err { background: #fdecea; color: #8c2318; }
+.qr-perso .groupe-btn .btn { width: 100%; white-space: normal; font-size: 11.5px; line-height: 1.25; padding: 5px 6px; }
+.form-membre > div:first-child { min-width: 0; }
+
+/* 1.6 — gestion courante */
+.btn-icone { border: 0; background: transparent; cursor: pointer; font-size: 15px; padding: 2px 4px; border-radius: 6px; vertical-align: middle; }
+.btn-icone:hover { background: #eef2f7; }
+.caisses-grille { display: grid; grid-template-columns: repeat(auto-fill, minmax(190px, 1fr)); gap: 14px; margin-bottom: 18px; }
+.caisse { background: #fff; border: 1px solid #e3e7ee; border-radius: 12px; padding: 14px; border-top: 4px solid #0f6b45; }
+.caisse small { color: #6b7686; font-size: 11.5px; text-transform: uppercase; letter-spacing: .3px; }
+.caisse b { display: block; font-size: 22px; margin-top: 4px; }
+.caisse.neg { border-top-color: #c0392b; } .caisse.neg b { color: #c0392b; }
+.reunion-carte { cursor: pointer; } .reunion-carte:hover { box-shadow: 0 2px 10px rgba(0,0,0,.08); }
+.pres-sel { display: inline-flex; gap: 2px; } .pres-sel label { border: 1px solid #d6dbe3; border-radius: 6px; padding: 3px 8px; font-size: 12px; cursor: pointer; user-select: none; }
+.pres-sel input { display: none; } .pres-sel input:checked + span { font-weight: 700; }
+.pres-sel label.P:has(input:checked) { background: #e3f4ea; border-color: #1e8e4e; } .pres-sel label.R:has(input:checked) { background: #fff3d6; border-color: #d9a400; }
+.pres-sel label.A:has(input:checked) { background: #fdecea; border-color: #c0392b; } .pres-sel label.E:has(input:checked) { background: #eef1f6; border-color: #7a8699; }
