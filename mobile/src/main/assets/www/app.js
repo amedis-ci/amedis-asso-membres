@@ -385,11 +385,11 @@
     el.innerHTML = rec.map((r, i) => `<div class="recent" data-i="${i}" style="--i:${i}">
       <span class="ico-rec">${UI.icone('documents')}</span><div style="flex:1;min-width:0"><strong>${esc(r.nom)}</strong>
       <small>${r.erreur ? esc(r.erreur) : `${esc(r.association || '')} · exercice ${esc(r.exercice || '')} · ${r.nbMembres} membre(s)`} · modifié le ${new Date(r.modifie).toLocaleString('fr-FR')}</small></div>
-      <button class="x" title="Retirer de la liste" data-x="${i}">×</button></div>`).join('');
+      <button class="x" title="Supprimer cet exercice du téléphone" data-x="${i}">×</button></div>`).join('');
     UI.cascade(el);
     $$('.recent', el).forEach(d => d.onclick = async (e) => {
       const r = rec[+d.dataset.i];
-      if (e.target.dataset.x !== undefined) { e.stopPropagation(); await A.retirerRecent(r.chemin); afficherAccueil(); return; }
+      if (e.target.dataset.x !== undefined) { e.stopPropagation(); if (!(await confirmer('Supprimer cet exercice du téléphone ?', `« ${r.nom} »${r.association ? ' (' + r.association + ')' : ''} sera supprimé de ce téléphone. Si c'est l'exercice de l'association, vérifiez qu'il est aussi sur le PC ou sauvegardé sur Google Drive.`, 'Supprimer', true))) return; await A.retirerRecent(r.chemin); toast('Exercice supprimé du téléphone.', 'ok'); afficherAccueil(); return; }
       ouvrir(r.chemin);
     });
   }

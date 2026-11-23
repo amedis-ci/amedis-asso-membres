@@ -450,7 +450,17 @@
       N.partagerUri(uris[affiche], 'application/octet-stream');
       return affiche;
     },
-    retirerRecent: (p) => essai(() => { const c = lireConfig(); c.recents = (c.recents || []).filter(x => x !== p); ecrireConfig(c); return true; }),
+    /** Sur le téléphone, « × » supprime l'exercice ; une copie est gardée dans la corbeille de l'appli */
+    retirerRecent: (p) => essai(() => {
+      const c = lireConfig(); c.recents = (c.recents || []).filter(x => x !== p); if (c.derniere === p) delete c.derniere; ecrireConfig(c);
+      if (/^Exercices\/[^/]+$/.test(p) && F.existe(p)) {
+        const t = F.lire(p);
+        if (t != null) F.ecrire('Corbeille/' + new Date().toISOString().slice(0, 10) + ' - ' + base(p), t);
+        F.supprimer(p);
+        const vieux = F.liste('Corbeille').map(x => x.nom).sort(); while (vieux.length > 20) F.supprimer('Corbeille/' + vieux.shift());
+      }
+      return true;
+    }),
     importerExcel: async () => {
       const f = await asynchrone('choisirFichier', { mimes: ['application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', 'application/vnd.ms-excel.sheet.macroEnabled.12', 'text/csv', 'text/comma-separated-values', 'application/octet-stream'] });
       if (!f) return null;
